@@ -108,9 +108,29 @@ def get_all_alunos():
 @app.get("/api/all-turmas")
 def get_all_turmas():
     """Retorna a lista completa de turmas."""
-    _, df_turmas, _ = get_dados_cached()
-    df_turmas['Horário'] = df_turmas['Horário'].apply(formatar_horario)
-    return df_turmas.to_dict(orient='records')
+    df_alunos, df_turmas, _ = get_dados_cached()
+
+    # Formata os horários em ambos os dataframes para garantir a correspondência
+    df_alunos['Horario_Formatado'] = df_alunos['Horário'].apply(formatar_horario)
+    df_turmas['Horario_Formatado'] = df_turmas['Horário'].apply(formatar_horario)
+
+    # Calcula a contagem de alunos por turma/horário/professor
+    student_counts = df_alunos.groupby(['Turma', 'Horario_Formatado', 'Professor']).size().reset_index(name='qtd.')
+
+    # Junta a contagem de volta ao dataframe de turmas
+    df_turmas_com_qtd = pd.merge(
+        df_turmas,
+        student_counts,
+        on=['Turma', 'Horario_Formatado', 'Professor'],
+        how='left'
+    )
+    
+    # Preenche com 0 turmas que não têm alunos cadastrados e converte para inteiro
+    df_turmas_com_qtd['qtd.'] = df_turmas_com_qtd['qtd.'].fillna(0).astype(int)
+
+    # Usa o horário formatado para a resposta e remove colunas auxiliares
+    df_turmas_com_qtd = df_turmas_com_qtd.rename(columns={"Horario_Formatado": "Horário"}).drop(columns=['Horário_x', 'Horário_y'], errors='ignore')
+    return df_turmas_com_qtd.to_dict(orient='records')
 
 @app.get("/api/alunos")
 def obter_alunos_filtrados(
