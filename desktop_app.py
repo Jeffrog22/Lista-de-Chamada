@@ -89,7 +89,7 @@ class App(ctk.CTk):
         self.alunos_prof_frame = ctk.CTkFrame(self.alunos_control_frame, fg_color="transparent") # Frame para os radio buttons
         self.alunos_prof_frame.grid(row=4, column=0, columnspan=2, padx=20, pady=5, sticky="ew")
 
-        meses_pt = [datetime(2000, i, 1).strftime('%B').capitalize() for i in range(1, 13)]
+        meses_pt = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
         self.alunos_mes_combo = ctk.CTkComboBox(self.alunos_control_frame, values=meses_pt)
         self.alunos_mes_combo.grid(row=5, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
 
@@ -142,6 +142,7 @@ class App(ctk.CTk):
         self.mes_atual_str = meses[datetime.now().month - 1]
         self.chamada_data = {} # Guarda os dados da API
         self.chamada_widgets = {} # Guarda os widgets de botão para poder ler o estado
+        self.all_students_data = None # Cache para todos os alunos na aba "Alunos"
         
         # Mapeamento de views para seus frames de controle
         self.control_frames = {
@@ -176,7 +177,7 @@ class App(ctk.CTk):
         if view_name in self.control_frames:
             self.control_frames[view_name].grid(row=0, column=0, sticky="nsew")
         if view_name == "Alunos":
-            self.limpar_conteudo_aba_alunos()
+            self.iniciar_busca_alunos_filtrados(aplicar_filtros=False) # Carrega todos os alunos ao entrar na aba
         elif view_name == "Turmas":
             self.carregar_lista_turmas() # Carrega a lista ao entrar na aba
             # Recolhe o menu ao selecionar "Turmas"
@@ -188,6 +189,7 @@ class App(ctk.CTk):
         for frame in self.control_frames.values():
             frame.grid_forget()
         self.main_menu_frame.grid(row=0, column=0, sticky="nsew")
+        self.all_students_data = None # Limpa o cache ao voltar para o menu
 
     def run_in_thread(self, target_func):
         """Executa uma função em uma nova thread para não travar a UI."""
@@ -373,40 +375,77 @@ class App(ctk.CTk):
             widget.destroy()
         ctk.CTkLabel(self.alunos_scroll_frame, text="Use os filtros para buscar os alunos e seu histórico.").pack(pady=20)
 
-    def iniciar_busca_alunos_filtrados(self):
+    def iniciar_busca_alunos_filtrados(self, aplicar_filtros=True):
         """Inicia a busca de alunos na aba 'Alunos' usando os filtros."""
         for widget in self.alunos_scroll_frame.winfo_children():
             widget.destroy()
         ctk.CTkLabel(self.alunos_scroll_frame, text="Buscando dados...").pack(pady=20)
-        self.run_in_thread(self.buscar_e_construir_grid_alunos)
+        self.run_in_thread(lambda: self.buscar_e_filtrar_alunos(aplicar_filtros))
 
-    def buscar_e_construir_grid_alunos(self):
-        """Busca e exibe a lista de alunos na aba 'Alunos' com base nos filtros."""
-        meses_pt = {datetime(2000, i, 1).strftime('%B').capitalize(): i for i in range(1, 13)}
-        mes_selecionado = self.alunos_mes_combo.get()
-
-        params = {
-            "turma": self.alunos_turma_combo.get(),
-            "horario": self.alunos_horario_combo.get(),
-            "professor": self.alunos_prof_var.get(),
-            "mes": meses_pt.get(mes_selecionado, datetime.now().month)
-        }
-        try:
-            response = requests.get(f"{API_BASE_URL}/api/alunos", params=params)
-            response.raise_for_status()
-            data = response.json()
-
-            for widget in self.alunos_scroll_frame.winfo_children():
-                widget.destroy()
-
-            if not data.get('alunos'):
-                ctk.CTkLabel(self.alunos_scroll_frame, text="Nenhum aluno encontrado para os filtros selecionados.").pack(pady=20)
+    def buscar_e_filtrar_alunos(self, aplicar_filtros=True):
+        """Busca todos os alunos da API (se ainda não estiverem em cache) e depois aplica os filtros."""
+        # Se os dados de todos os alunos ainda não foram carregados, busca na API.
+        if self.all_students_data is None:
+            try:
+                # A API /api/alunos sem parâmetros deve retornar todos os alunos.
+                response = requests.get(f"{API_BASE_URL}/api/alunos")
+                response.raise_for_status()
+                self.all_students_data = response.json()
+                print("Todos os alunos foram carregados da API para o cache.") # Log para o terminal
+            except requests.exceptions.RequestException as e:
+                for widget in self.alunos_scroll_frame.winfo_children():
+                    widget.destroy()
+                ctk.CTkLabel(self.alunos_scroll_frame, text=f"Erro ao carregar a lista de alunos: {e}").pack(pady=20)
                 return
 
-            # Constrói a grade estática na aba de alunos
-            self._construir_grid_generico(self.alunos_scroll_frame, data, interactive=False)
-        except requests.exceptions.RequestException as e:
-            ctk.CTkLabel(self.alunos_scroll_frame, text=f"Erro ao carregar alunos: {e}").pack(pady=20)
+        # Agora, com os dados em cache, aplica os filtros selecionados.
+        self._filtrar_e_construir_grid_alunos(aplicar_filtros)
+
+    def _filtrar_e_construir_grid_alunos(self, aplicar_filtros=True):
+        """Filtra os dados de alunos em cache e constrói a grade de exibição."""
+        if not self.all_students_data or not self.all_students_data.get('alunos'):
+            ctk.CTkLabel(self.alunos_scroll_frame, text="Nenhum aluno encontrado.").pack(pady=20)
+            return
+
+        meses_pt = {mes: i+1 for i, mes in enumerate(["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"])}
+        mes_selecionado = self.alunos_mes_combo.get()
+        mes_num = meses_pt.get(mes_selecionado)
+
+        # Filtros da UI
+        filtro_turma = self.alunos_turma_combo.get()
+        filtro_horario = self.alunos_horario_combo.get()
+        filtro_prof = self.alunos_prof_var.get()
+
+        alunos_para_exibir = self.all_students_data['alunos']
+        datas_para_exibir = self.all_students_data['datas']
+
+        if aplicar_filtros:
+            # Filtra a lista de alunos em memória
+            alunos_para_exibir = [
+                aluno for aluno in self.all_students_data['alunos']
+                if (filtro_turma == "Todas" or aluno.get("Turma") == filtro_turma) and
+                   (filtro_horario == "Todos" or aluno.get("Horário") == filtro_horario) and
+                   (filtro_prof == "Todos" or aluno.get("Professor") == filtro_prof)
+            ]
+            # Filtra as datas com base no mês selecionado
+            if mes_num:
+                datas_para_exibir = [d for d in self.all_students_data.get('datas', []) if f"/{mes_num:02d}/" in d]
+
+        # Prepara os dados para exibição no formato esperado pela função de construção
+        dados_para_exibir = {
+            "alunos": alunos_para_exibir,
+            "datas": datas_para_exibir
+        }
+
+        for widget in self.alunos_scroll_frame.winfo_children():
+            widget.destroy()
+
+        if not dados_para_exibir['alunos']:
+            ctk.CTkLabel(self.alunos_scroll_frame, text="Nenhum aluno encontrado para os filtros selecionados.").pack(pady=20)
+            return
+
+        # Constrói a grade estática na aba de alunos com os dados filtrados
+        self._construir_grid_generico(self.alunos_scroll_frame, dados_para_exibir, interactive=False)
 
     def carregar_lista_turmas(self):
         """Busca e exibe a lista de turmas com botões de atalho."""
