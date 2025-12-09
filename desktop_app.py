@@ -33,9 +33,15 @@ class App(ctk.CTk):
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
         self.sidebar_frame.grid_rowconfigure(5, weight=1) # Espaço para empurrar o botão de salvar para baixo
 
+        # --- 1.0. Botão para recolher/expandir sidebar ---
+        self.sidebar_expanded = True
+        self.toggle_sidebar_button = ctk.CTkButton(self.sidebar_frame, text="☰", width=30, font=ctk.CTkFont(size=20), command=self.toggle_sidebar)
+        self.toggle_sidebar_button.grid(row=0, column=0, padx=(10, 0), pady=(10,0), sticky="w")
+
+
         # --- 1.1. Frame do Menu Principal (visível no início) ---
         self.main_menu_frame = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
-        self.main_menu_frame.grid(row=0, column=0, sticky="nsew")
+        self.main_menu_frame.grid(row=1, column=0, sticky="nsew")
         self.main_menu_label = ctk.CTkLabel(self.main_menu_frame, text="Menu Principal", font=ctk.CTkFont(size=20, weight="bold"))
         self.main_menu_label.grid(row=0, column=0, padx=20, pady=(20, 10))
         self.chamada_button = ctk.CTkButton(self.main_menu_frame, text="Chamada", command=lambda: self.show_view("Chamada"))
@@ -78,6 +84,14 @@ class App(ctk.CTk):
         # Adicionar filtros aqui no futuro, se necessário
         self.alunos_back_button = ctk.CTkButton(self.alunos_control_frame, text="< Voltar ao Menu", command=self.show_main_menu, fg_color="transparent", border_width=1)
         self.alunos_back_button.grid(row=7, column=0, padx=20, pady=(20, 10), sticky="s")
+
+        # --- 1.4. Frame do Menu de Controle de TURMAS (inicialmente oculto) ---
+        self.turmas_control_frame = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
+        # (grid é chamado em show_view)
+        self.turmas_control_label = ctk.CTkLabel(self.turmas_control_frame, text="Controle de Turmas", font=ctk.CTkFont(size=16, weight="bold"))
+        self.turmas_control_label.grid(row=0, column=0, padx=20, pady=(20, 10))
+        self.turmas_back_button = ctk.CTkButton(self.turmas_control_frame, text="< Voltar ao Menu", command=self.show_main_menu, fg_color="transparent", border_width=1)
+        self.turmas_back_button.grid(row=7, column=0, padx=20, pady=(20, 10), sticky="s")
 
         # --- 2. ÁREA PRINCIPAL COM ABAS ---
         self.tab_view = ctk.CTkTabview(self, corner_radius=8)
@@ -123,20 +137,41 @@ class App(ctk.CTk):
         self.main_menu_frame.grid_forget()
         self.chamada_control_frame.grid_forget()
         self.alunos_control_frame.grid_forget()
+        self.turmas_control_frame.grid_forget()
 
         if view_name == "Chamada":
-            self.chamada_control_frame.grid(row=0, column=0, sticky="nsew")
+            self.chamada_control_frame.grid(row=1, column=0, sticky="nsew")
         elif view_name == "Alunos":
-            self.alunos_control_frame.grid(row=0, column=0, sticky="nsew")
+            self.alunos_control_frame.grid(row=1, column=0, sticky="nsew")
             self.carregar_lista_alunos() # Carrega a lista ao entrar na aba
         elif view_name == "Turmas":
+            self.turmas_control_frame.grid(row=1, column=0, sticky="nsew")
             self.carregar_lista_turmas() # Carrega a lista ao entrar na aba
 
     def show_main_menu(self):
         """Mostra o menu principal e esconde os de controle."""
         self.chamada_control_frame.grid_forget()
         self.alunos_control_frame.grid_forget()
-        self.main_menu_frame.grid(row=0, column=0, sticky="nsew")
+        self.turmas_control_frame.grid_forget()
+        self.main_menu_frame.grid(row=1, column=0, sticky="nsew")
+
+    def toggle_sidebar(self):
+        """Recolhe ou expande a sidebar."""
+        if self.sidebar_expanded:
+            # Recolher
+            self.main_menu_frame.grid_forget()
+            self.chamada_control_frame.grid_forget()
+            self.alunos_control_frame.grid_forget()
+            self.turmas_control_frame.grid_forget()
+
+            self.sidebar_frame.configure(width=50)
+            self.toggle_sidebar_button.configure(text="☰") # Manter o ícone
+            self.sidebar_expanded = False
+        else:
+            # Expandir
+            self.sidebar_frame.configure(width=250)
+            self.show_view(self.tab_view.get()) # Mostra o menu de controle correto para a aba atual
+            self.sidebar_expanded = True
 
     def run_in_thread(self, target_func):
         """Executa uma função em uma nova thread para não travar a UI."""
