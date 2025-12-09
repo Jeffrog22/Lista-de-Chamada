@@ -90,10 +90,10 @@ class App(ctk.CTk):
         self.alunos_prof_frame.grid(row=4, column=0, columnspan=2, padx=20, pady=5, sticky="ew")
 
         meses_pt = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
-        self.alunos_mes_combo = ctk.CTkComboBox(self.alunos_control_frame, values=meses_pt)
+        self.alunos_mes_combo = ctk.CTkComboBox(self.alunos_control_frame, values=["Todos"] + meses_pt)
         self.alunos_mes_combo.grid(row=5, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
 
-        self.alunos_buscar_button = ctk.CTkButton(self.alunos_control_frame, text="Buscar Alunos", command=self.iniciar_busca_alunos_filtrados)
+        self.alunos_buscar_button = ctk.CTkButton(self.alunos_control_frame, text="Buscar", command=self.iniciar_busca_alunos_filtrados)
         self.alunos_buscar_button.grid(row=6, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
 
         self.alunos_back_button = ctk.CTkButton(self.alunos_control_frame, text="< Voltar ao Menu", command=self.show_main_menu, fg_color="transparent", border_width=1)
@@ -142,7 +142,6 @@ class App(ctk.CTk):
         self.mes_atual_str = meses[datetime.now().month - 1]
         self.chamada_data = {} # Guarda os dados da API
         self.chamada_widgets = {} # Guarda os widgets de botão para poder ler o estado
-        self.all_students_data = None # Cache para todos os alunos na aba "Alunos"
         
         # Mapeamento de views para seus frames de controle
         self.control_frames = {
@@ -177,7 +176,7 @@ class App(ctk.CTk):
         if view_name in self.control_frames:
             self.control_frames[view_name].grid(row=0, column=0, sticky="nsew")
         if view_name == "Alunos":
-            self.iniciar_busca_alunos_filtrados(aplicar_filtros=False) # Carrega todos os alunos ao entrar na aba
+            self.limpar_conteudo_aba_alunos() # Apenas limpa a aba ao entrar
         elif view_name == "Turmas":
             self.carregar_lista_turmas() # Carrega a lista ao entrar na aba
             # Recolhe o menu ao selecionar "Turmas"
@@ -189,7 +188,6 @@ class App(ctk.CTk):
         for frame in self.control_frames.values():
             frame.grid_forget()
         self.main_menu_frame.grid(row=0, column=0, sticky="nsew")
-        self.all_students_data = None # Limpa o cache ao voltar para o menu
 
     def run_in_thread(self, target_func):
         """Executa uma função em uma nova thread para não travar a UI."""
@@ -216,7 +214,7 @@ class App(ctk.CTk):
                 self.alunos_horario_combo.configure(values=data.get('horarios', []))
                 self.alunos_horario_combo.set(data.get('horarios', [''])[0])
                 self.alunos_prof_var.set(professores[0] if professores else "")
-                self.alunos_mes_combo.set(self.mes_atual_str.capitalize())
+                self.alunos_mes_combo.set("Todos") # Define "Todos" como padrão
             except requests.exceptions.RequestException as e:
                 messagebox.showerror("Erro de Conexão", f"Não foi possível carregar os filtros da API.\nVerifique se o backend está rodando.\n\nErro: {e}")
         
@@ -337,25 +335,29 @@ class App(ctk.CTk):
         self.run_in_thread(self.salvar_chamada)
 
     def salvar_chamada(self):
-        payload = {"registros": {}}
-
         if not self.chamada_widgets:
             messagebox.showwarning("Aviso", "Não há dados de chamada para salvar. Busque os alunos primeiro.")
             self.chamada_info_label.configure(text="Nada para salvar.")
             return
 
+        payload = {
+            "registros": []
+        }
+
         # Coleta os dados dos widgets
-        for nome_aluno, data_widgets in self.chamada_widgets.items():
-            registros_aluno = {}
+        for aluno in self.chamada_data.get('alunos', []):
+            nome_aluno = aluno.get('Nome')
+            if not nome_aluno or nome_aluno not in self.chamada_widgets:
+                continue
+
+            data_widgets = self.chamada_widgets[nome_aluno]
             for data_str, widget_info in data_widgets.items():
                 status_id = widget_info["var"].get()
                 status_code = STATUS_MAP[status_id]["code"]
-                registros_aluno[data_str] = status_code
-            
-            if registros_aluno:
-                payload["registros"][nome_aluno] = registros_aluno
+                if status_code:  # Salva apenas se houver um status definido (não vazio)
+                    payload["registros"].append({"Nome": nome_aluno, "Data": data_str, "Status": status_code})
 
-        if not payload["registros"]:
+        if not payload.get("registros"):
             messagebox.showinfo("Informação", "Nenhuma alteração detectada para salvar.")
             self.chamada_info_label.configure(text="Nenhuma alteração para salvar.")
             return
@@ -380,15 +382,15 @@ class App(ctk.CTk):
         for widget in self.alunos_scroll_frame.winfo_children():
             widget.destroy()
         ctk.CTkLabel(self.alunos_scroll_frame, text="Buscando dados...").pack(pady=20)
-        self.run_in_thread(lambda: self.buscar_e_filtrar_alunos(aplicar_filtros))
+        self.run_in_thread(self.buscar_e_filtrar_alunos)
 
     def buscar_e_filtrar_alunos(self, aplicar_filtros=True):
         """Busca todos os alunos da API (se ainda não estiverem em cache) e depois aplica os filtros."""
         # Se os dados de todos os alunos ainda não foram carregados, busca na API.
         if self.all_students_data is None:
             try:
-                # A API /api/alunos sem parâmetros deve retornar todos os alunos.
-                response = requests.get(f"{API_BASE_URL}/api/alunos")
+                # A API /api/alunos requer um parâmetro de mês. "Todos" busca todos os registros.
+                response = requests.get(f"{API_BASE_URL}/api/alunos", params=params)
                 response.raise_for_status()
                 self.all_students_data = response.json()
                 print("Todos os alunos foram carregados da API para o cache.") # Log para o terminal
@@ -399,44 +401,10 @@ class App(ctk.CTk):
                 return
 
         # Agora, com os dados em cache, aplica os filtros selecionados.
-        self._filtrar_e_construir_grid_alunos(aplicar_filtros)
+        self._construir_grid_alunos(self.all_students_data)
 
-    def _filtrar_e_construir_grid_alunos(self, aplicar_filtros=True):
-        """Filtra os dados de alunos em cache e constrói a grade de exibição."""
-        if not self.all_students_data or not self.all_students_data.get('alunos'):
-            ctk.CTkLabel(self.alunos_scroll_frame, text="Nenhum aluno encontrado.").pack(pady=20)
-            return
-
-        meses_pt = {mes: i+1 for i, mes in enumerate(["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"])}
-        mes_selecionado = self.alunos_mes_combo.get()
-        mes_num = meses_pt.get(mes_selecionado)
-
-        # Filtros da UI
-        filtro_turma = self.alunos_turma_combo.get()
-        filtro_horario = self.alunos_horario_combo.get()
-        filtro_prof = self.alunos_prof_var.get()
-
-        alunos_para_exibir = self.all_students_data['alunos']
-        datas_para_exibir = self.all_students_data['datas']
-
-        if aplicar_filtros:
-            # Filtra a lista de alunos em memória
-            alunos_para_exibir = [
-                aluno for aluno in self.all_students_data['alunos']
-                if (filtro_turma == "Todas" or aluno.get("Turma") == filtro_turma) and
-                   (filtro_horario == "Todos" or aluno.get("Horário") == filtro_horario) and
-                   (filtro_prof == "Todos" or aluno.get("Professor") == filtro_prof)
-            ]
-            # Filtra as datas com base no mês selecionado
-            if mes_num:
-                datas_para_exibir = [d for d in self.all_students_data.get('datas', []) if f"/{mes_num:02d}/" in d]
-
-        # Prepara os dados para exibição no formato esperado pela função de construção
-        dados_para_exibir = {
-            "alunos": alunos_para_exibir,
-            "datas": datas_para_exibir
-        }
-
+    def _construir_grid_alunos(self, dados_para_exibir):
+        """Constrói a grade de exibição na aba 'Alunos'."""
         for widget in self.alunos_scroll_frame.winfo_children():
             widget.destroy()
 
@@ -444,8 +412,37 @@ class App(ctk.CTk):
             ctk.CTkLabel(self.alunos_scroll_frame, text="Nenhum aluno encontrado para os filtros selecionados.").pack(pady=20)
             return
 
-        # Constrói a grade estática na aba de alunos com os dados filtrados
-        self._construir_grid_generico(self.alunos_scroll_frame, dados_para_exibir, interactive=False)
+        # --- Lógica de construção do Grid (anteriormente em _construir_grid_generico) ---
+        frame = self.alunos_scroll_frame
+        dados = dados_para_exibir
+
+        # Cabeçalhos
+        headers = ['Nível', 'Nome'] + [d.split('/')[0] for d in dados['datas']]
+        frame.grid_columnconfigure(1, weight=1)  # Coluna do nome
+
+        for i, header_text in enumerate(headers):
+            header_label = ctk.CTkLabel(frame, text=header_text, font=ctk.CTkFont(weight="bold"))
+            header_label.grid(row=0, column=i, padx=1, pady=1, sticky="ew")
+
+        # Linhas de Alunos
+        for row_idx, aluno in enumerate(dados['alunos'], start=1):
+            # Nível
+            ctk.CTkLabel(frame, text=aluno.get('Nível', '')).grid(row=row_idx, column=0, padx=(5, 1), pady=1)
+            # Nome
+            ctk.CTkLabel(frame, text=aluno.get('Nome', ''), anchor="w").grid(row=row_idx, column=1, padx=1, pady=1, sticky="ew")
+
+            # Células de status (não interativas)
+            for col_idx, data_str in enumerate(dados['datas'], start=2):
+                status_code = aluno.get(data_str, "")
+                status_info = next((info for info in STATUS_MAP.values() if info["code"] == status_code), STATUS_MAP[0])
+                
+                status_label = ctk.CTkLabel(frame,
+                                            text=status_info["text"],
+                                            fg_color=status_info["fg_color"],
+                                            text_color="white",
+                                            width=35,
+                                            font=ctk.CTkFont(weight="bold"))
+                status_label.grid(row=row_idx, column=col_idx, padx=1, pady=1)
 
     def carregar_lista_turmas(self):
         """Busca e exibe a lista de turmas com botões de atalho."""
@@ -457,10 +454,12 @@ class App(ctk.CTk):
             response.raise_for_status()
             turmas = response.json()
 
-            headers = ["Turma", "Horário", "Professor", "Qtd.", "Chamada"]
+            headers = ["Nível", "Turma", "Horário", "Professor", "Data de Início", "Qtd.", "Atalho"]
             self.turmas_scroll_frame.grid_columnconfigure(0, weight=1)
             self.turmas_scroll_frame.grid_columnconfigure(1, weight=1)
             self.turmas_scroll_frame.grid_columnconfigure(2, weight=1)
+            self.turmas_scroll_frame.grid_columnconfigure(3, weight=1)
+            self.turmas_scroll_frame.grid_columnconfigure(4, weight=1)
 
             for i, header in enumerate(headers):
                 # Centraliza o cabeçalho da quantidade
@@ -468,15 +467,17 @@ class App(ctk.CTk):
                 ctk.CTkLabel(self.turmas_scroll_frame, text=header, font=ctk.CTkFont(weight="bold"), anchor=anchor).grid(row=0, column=i, padx=5, pady=5, sticky="ew")
 
             for row_idx, turma in enumerate(turmas, start=1):
-                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Turma", ""), anchor="w").grid(row=row_idx, column=0, padx=5, pady=5, sticky="ew")
-                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Horário", ""), anchor="w").grid(row=row_idx, column=1, padx=5, pady=5, sticky="ew")
-                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Professor", ""), anchor="w").grid(row=row_idx, column=2, padx=5, pady=5, sticky="ew")
-                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("qtd.", 0), anchor="center").grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
+                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Nível", ""), anchor="w").grid(row=row_idx, column=0, padx=5, pady=5, sticky="ew")
+                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Turma", ""), anchor="w").grid(row=row_idx, column=1, padx=5, pady=5, sticky="ew")
+                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Horário", ""), anchor="w").grid(row=row_idx, column=2, padx=5, pady=5, sticky="ew")
+                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Professor", ""), anchor="w").grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
+                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Data de Início", ""), anchor="w").grid(row=row_idx, column=4, padx=5, pady=5, sticky="ew")
+                ctk.CTkLabel(self.turmas_scroll_frame, text=str(turma.get("qtd_alunos", 0)), anchor="center").grid(row=row_idx, column=5, padx=5, pady=5, sticky="ew")
                 
                 # Botão de atalho com ícone
                 atalho_btn = ctk.CTkButton(self.turmas_scroll_frame, text="»", width=40, font=ctk.CTkFont(size=16, weight="bold"))
                 atalho_btn.configure(command=lambda t=turma: self.usar_atalho_turma(t))
-                atalho_btn.grid(row=row_idx, column=4, padx=5, pady=5)
+                atalho_btn.grid(row=row_idx, column=6, padx=5, pady=5)
 
         except requests.exceptions.RequestException as e:
             ctk.CTkLabel(self.turmas_scroll_frame, text=f"Erro ao carregar turmas: {e}").pack()
