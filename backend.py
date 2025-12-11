@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import calendar
 from pydantic import BaseModel
 from typing import List, Dict, Tuple
-import time
+import time, os
 
 # --- INICIALIZAÇÃO DO APP FASTAPI ---
 app = FastAPI(
@@ -28,26 +28,65 @@ NOME_ARQUIVO = 'chamadaBelaVista.xlsx'
 CACHE_EXPIRATION_SECONDS = 60  # Recarrega os dados do Excel a cada 60 segundos
 _cache: Dict[str, any] = {"data": None, "timestamp": 0}
 
-def get_dados_cached() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def calcular_idade(data_nascimento):
+    """Calcula a idade a partir da data de nascimento."""
+    if pd.isna(data_nascimento) or not isinstance(data_nascimento, (datetime, pd.Timestamp)):
+        return None
+    hoje = datetime.now()
+    # Calcula a idade subtraindo o ano de nascimento do ano atual.
+    # Em seguida, subtrai 1 se o aniversário deste ano ainda não ocorreu.
+    idade = hoje.year - data_nascimento.year - ((hoje.month, hoje.day) < (data_nascimento.month, data_nascimento.day))
+    return idade
+
+def definir_categoria_por_idade(idade, df_categorias):
+    """Define a categoria com base na idade, usando a tabela de categorias fornecida."""
+    if pd.isna(idade) or idade is None:
+        return "Não definida"
+    
+    # Itera sobre as regras de categoria carregadas da planilha
+    for _, linha in df_categorias.iterrows():
+        idade_min = linha.get('Idade Mínima', 0)
+        idade_max = linha.get('Idade Máxima', float('inf'))
+        if idade_min <= idade <= idade_max:
+            return linha.get('Categoria', 'Não definida')
+            
+    return "Não definida"
+
+def get_dados_cached() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Carrega os dados da planilha Excel, usando um cache em memória para evitar
     leituras repetidas do arquivo a cada requisição.
     """
     now = time.time()
-    if now - _cache["timestamp"] > CACHE_EXPIRATION_SECONDS:
+    # Verifica se o cache expirou ou se o arquivo foi modificado
+    file_mod_time = os.path.getmtime(NOME_ARQUIVO) if os.path.exists(NOME_ARQUIVO) else 0
+    if now - _cache.get("timestamp", 0) > CACHE_EXPIRATION_SECONDS or file_mod_time > _cache.get("timestamp", 0):
         try:
             xls = pd.ExcelFile(NOME_ARQUIVO)
             df_alunos = pd.read_excel(xls, sheet_name='Alunos').fillna("")
             df_turmas = pd.read_excel(xls, sheet_name='Turmas').fillna("")
+
+            # Carrega categorias ou cria um DF vazio se a aba não existir
+            if 'Categorias' in xls.sheet_names:
+                df_categorias = pd.read_excel(xls, sheet_name='Categorias')
+            else:
+                df_categorias = pd.DataFrame(columns=['Categoria', 'Idade Mínima', 'Idade Máxima'])
+
+            # --- CÁLCULO DE IDADE E CATEGORIA ---
+            if 'Data de Nascimento' in df_alunos.columns:
+                df_alunos['Data de Nascimento'] = pd.to_datetime(df_alunos['Data de Nascimento'], errors='coerce')
+                df_alunos['Idade'] = df_alunos['Data de Nascimento'].apply(calcular_idade)
+                df_alunos['Categoria'] = df_alunos['Idade'].apply(definir_categoria_por_idade, args=(df_categorias,))
+                df_alunos['Idade'] = df_alunos['Idade'].fillna(0).astype(int)
             
-            # Garante que a aba 'Registros' exista e tenha a coluna 'Nome'
+            # Carrega registros ou cria um DF vazio se a aba não existir
             if 'Registros' in xls.sheet_names:
                 df_registros = pd.read_excel(xls, sheet_name='Registros')
             else:
                 df_registros = pd.DataFrame(columns=['Nome'])
 
-            _cache["data"] = (df_alunos, df_turmas, df_registros)
-            _cache["timestamp"] = now
+            _cache["data"] = (df_alunos, df_turmas, df_registros, df_categorias)
+            _cache["timestamp"] = now # Usa 'now' para o timestamp do cache
         except FileNotFoundError:
             raise HTTPException(status_code=500, detail=f"Arquivo '{NOME_ARQUIVO}' não encontrado no servidor.")
         except Exception as e:
@@ -83,7 +122,7 @@ def root():
 @app.get("/api/filtros")
 def obter_opcoes_de_filtro():
     """Retorna listas de opções únicas para os filtros do frontend."""
-    _, df_turmas, _ = get_dados_cached()
+    df_alunos, df_turmas, _, df_categorias = get_dados_cached()
     
     turmas = df_turmas['Turma'].unique().tolist()
     
@@ -92,23 +131,27 @@ def obter_opcoes_de_filtro():
     horarios = df_turmas['Horario_Formatado'].unique().tolist()
     
     professores = df_turmas['Professor'].unique().tolist()
+    categorias = df_alunos['Categoria'].unique().tolist() if 'Categoria' in df_alunos.columns else []
     
     return {
         "turmas": turmas,
         "horarios": horarios,
-        "professores": professores
+        "professores": professores,
+        "categorias": sorted([cat for cat in categorias if cat != "Não definida"])
     }
 
 @app.get("/api/all-alunos")
 def get_all_alunos():
     """Retorna a lista completa de alunos."""
-    df_alunos, _, _ = get_dados_cached()
+    df_alunos, _, _, _ = get_dados_cached()
+    # Formata o horário para exibição consistente
+    df_alunos['Horário'] = df_alunos['Horário'].apply(formatar_horario)
     return df_alunos.to_dict(orient='records')
 
 @app.get("/api/all-turmas")
 def get_all_turmas():
     """Retorna a lista completa de turmas."""
-    df_alunos, df_turmas, _ = get_dados_cached()
+    df_alunos, df_turmas, _, _ = get_dados_cached()
 
     # Formata os horários em ambos os dataframes para garantir a correspondência
     df_alunos['Horario_Formatado'] = df_alunos['Horário'].apply(formatar_horario)
@@ -132,6 +175,13 @@ def get_all_turmas():
     df_turmas_com_qtd = df_turmas_com_qtd.rename(columns={"Horario_Formatado": "Horário"}).drop(columns=['Horário_x', 'Horário_y'], errors='ignore')
     return df_turmas_com_qtd.to_dict(orient='records')
 
+@app.get("/api/categorias")
+def get_all_categorias():
+    """Retorna a lista completa de categorias com suas regras de idade."""
+    _, _, _, df_categorias = get_dados_cached()
+    return df_categorias.to_dict(orient='records')
+
+
 @app.get("/api/alunos")
 def obter_alunos_filtrados(
     turma: str = Query(...),
@@ -142,7 +192,7 @@ def obter_alunos_filtrados(
     """
     Retorna a lista de alunos e os registros de presença para um determinado mês.
     """
-    df_alunos, _, df_registros = get_dados_cached()
+    df_alunos, _, df_registros, _ = get_dados_cached()
     ano_vigente = datetime.now().year
 
     # --- Lógica para gerar as datas de aula (adaptada do Streamlit) ---
@@ -183,7 +233,7 @@ def obter_alunos_filtrados(
 
     # Junta os alunos filtrados com seus registros de presença
     alunos_com_registros = pd.merge(
-        alunos_filtrados[['Turma', 'Horario_Formatado', 'Professor', 'Nível', 'Nome']],
+        alunos_filtrados[['Turma', 'Horario_Formatado', 'Professor', 'Nível', 'Nome', 'Idade', 'Categoria']],
         df_registros[['Nome'] + datas_mes_str],
         on='Nome',
         how='left'
@@ -201,7 +251,7 @@ def obter_alunos_filtrados(
 def obter_relatorio_frequencia(dias: int = 30):
     """Calcula e retorna as métricas de frequência para um período em dias."""
     try:
-        _, _, df_registros = get_dados_cached()
+        _, _, df_registros, _ = get_dados_cached()
     except Exception:
         return {"error": "Nenhum registro encontrado."}
 
@@ -247,7 +297,7 @@ def salvar_chamada(payload: ChamadaPayload):
     """Recebe e salva os registros de chamada na planilha."""
     try:
         # Carrega todos os dados do cache para uma reescrita segura
-        df_alunos, df_turmas, df_registros_orig = get_dados_cached()
+        df_alunos, df_turmas, df_registros_orig, df_categorias = get_dados_cached()
         df_registros = df_registros_orig.copy()
 
         for nome_aluno, registros_data in payload.registros.items():
@@ -269,6 +319,7 @@ def salvar_chamada(payload: ChamadaPayload):
             with pd.ExcelWriter(NOME_ARQUIVO, engine='openpyxl') as writer: # type: ignore
                 df_alunos.to_excel(writer, sheet_name='Alunos', index=False)
                 df_turmas.to_excel(writer, sheet_name='Turmas', index=False)
+                df_categorias.to_excel(writer, sheet_name='Categorias', index=False)
                 df_registros.to_excel(writer, sheet_name='Registros', index=False)
         except PermissionError:
             raise HTTPException(status_code=500, detail=f"Erro de permissão. O arquivo '{NOME_ARQUIVO}' pode estar aberto em outro programa.")
