@@ -132,12 +132,14 @@ def obter_opcoes_de_filtro():
     
     professores = df_turmas['Professor'].unique().tolist()
     categorias = df_alunos['Categoria'].unique().tolist() if 'Categoria' in df_alunos.columns else []
+    niveis = df_alunos['Nível'].unique().tolist() if 'Nível' in df_alunos.columns else []
     
     return {
         "turmas": turmas,
         "horarios": horarios,
         "professores": professores,
-        "categorias": sorted([cat for cat in categorias if cat != "Não definida"])
+        "categorias": sorted([cat for cat in categorias if cat != "Não definida"]),
+        "niveis": sorted([n for n in niveis if n != ""]) if niveis is not None else []
     }
 
 @app.get("/api/all-alunos")
@@ -293,14 +295,38 @@ def obter_relatorio_frequencia(dias: int = 30):
     return df_resultado.reset_index().to_dict(orient='records')
 
 @app.post("/api/chamada")
-def salvar_chamada(payload: ChamadaPayload):
-    """Recebe e salva os registros de chamada na planilha."""
+def salvar_chamada(payload: dict):
+    """Recebe e salva os registros de chamada na planilha.
+
+    Aceita dois formatos de payload:
+    - Estrutura antiga/ideal: {"registros": {"Nome": {"dd/mm/yyyy": "c"}}}
+    - Estrutura em lista: {"registros": [{"Nome": "x", "Data": "dd/mm/yyyy", "Status": "c"}, ...]}
+    """
     try:
         # Carrega todos os dados do cache para uma reescrita segura
         df_alunos, df_turmas, df_registros_orig, df_categorias = get_dados_cached()
         df_registros = df_registros_orig.copy()
 
-        for nome_aluno, registros_data in payload.registros.items():
+        registros = payload.get("registros")
+        if registros is None:
+            raise HTTPException(status_code=400, detail="Payload inválido: campo 'registros' ausente.")
+
+        # Converte payload em formato de lista para o formato dict esperado
+        if isinstance(registros, list):
+            registros_dict: Dict[str, Dict[str, str]] = {}
+            for rec in registros:
+                nome = rec.get('Nome') or rec.get('name')
+                data = rec.get('Data') or rec.get('data')
+                status = rec.get('Status') or rec.get('status')
+                if not nome or not data:
+                    continue
+                registros_dict.setdefault(nome, {})[data] = status
+            registros = registros_dict
+
+        if not isinstance(registros, dict):
+            raise HTTPException(status_code=400, detail="Formato de 'registros' inválido.")
+
+        for nome_aluno, registros_data in registros.items():
             if nome_aluno not in df_registros['Nome'].values:
                 nova_linha = pd.DataFrame([{'Nome': nome_aluno}])
                 df_registros = pd.concat([df_registros, nova_linha], ignore_index=True)
@@ -314,7 +340,6 @@ def salvar_chamada(payload: ChamadaPayload):
                 df_registros.loc[idx_registro, data] = status if status else pd.NA
 
         # Reescreve o arquivo Excel inteiro com os dados atualizados.
-        # Esta é a abordagem mais segura para garantir a integridade do arquivo.
         try:
             with pd.ExcelWriter(NOME_ARQUIVO, engine='openpyxl') as writer: # type: ignore
                 df_alunos.to_excel(writer, sheet_name='Alunos', index=False)
@@ -328,6 +353,8 @@ def salvar_chamada(payload: ChamadaPayload):
         _cache["timestamp"] = 0
 
         return {"status": "Chamada salva com sucesso!"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao salvar a chamada: {e}")
 

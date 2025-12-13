@@ -1,0 +1,7 @@
+pandas
+fastapi
+uvicorn
+openpyxl
+pydantic
+requests
+customtkinter
