@@ -418,12 +418,32 @@ class App(ctk.CTk):
             response.raise_for_status()
             alunos = response.json()
 
+            # Carrega categorias (sincrono no thread de trabalho) para definir categoria corretamente
+            try:
+                resp_cats = requests.get(f"{API_BASE_URL}/api/categorias")
+                resp_cats.raise_for_status()
+                categorias_list = resp_cats.json() or []
+            except requests.exceptions.RequestException:
+                categorias_list = []
+
+            def definir_categoria_por_idade_local(idade_val):
+                if idade_val is None:
+                    return 'Não Categorizado'
+                # Escolhe a maior 'Idade Mínima' que seja <= idade_val
+                sorted_rules = sorted(categorias_list, key=lambda r: r.get('Idade Mínima', 0), reverse=True)
+                for regra in sorted_rules:
+                    idade_min = regra.get('Idade Mínima', 0)
+                    if idade_val >= idade_min:
+                        return regra.get('Categoria') or regra.get('Nome da Categoria') or 'Não Categorizado'
+                return 'Não Categorizado'
+
             # Processa cada aluno para adicionar idade e categoria
             for aluno in alunos:
                 # Aceita múltiplas variações do nome da coluna de data de nascimento
-                data_nasc = aluno.get('Data de Nascimento') or aluno.get('Aniversário') or aluno.get('Aniversario') or aluno.get('Aniversario')
-                aluno['Idade'] = self._calcular_idade_no_ano(data_nasc)
-                aluno['Categoria'] = self._definir_categoria(aluno.get('Idade'))
+                data_nasc = aluno.get('Data de Nascimento') or aluno.get('Aniversário') or aluno.get('Aniversario')
+                aluno_idade = self._calcular_idade_no_ano(data_nasc)
+                aluno['Idade'] = aluno_idade if aluno_idade is not None else ''
+                aluno['Categoria'] = definir_categoria_por_idade_local(aluno_idade)
 
             self.all_students_data = alunos # Armazena a lista processada no cache
             
@@ -514,11 +534,28 @@ class App(ctk.CTk):
         """Calcula a idade que o aluno fará no ano corrente."""
         if not data_nasc_str:
             return None
-        try:
-            data_nasc = datetime.strptime(data_nasc_str, '%d/%m/%Y')
+
+        # Se já for um objeto datetime
+        if isinstance(data_nasc_str, datetime):
             ano_corrente = datetime.now().year
-            return ano_corrente - data_nasc.year
-        except (ValueError, TypeError):
+            return ano_corrente - data_nasc_str.year
+
+        data_text = str(data_nasc_str)
+        # Tenta formatos possíveis: dd/mm/YYYY, ISO (YYYY-mm-ddT...), ou apenas YYYY-mm-dd
+        for fmt in ('%d/%m/%Y', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d'):
+            try:
+                parsed = datetime.strptime(data_text.split('T')[0] if 'T' in data_text else data_text, fmt.split('T')[0])
+                ano_corrente = datetime.now().year
+                return ano_corrente - parsed.year
+            except (ValueError, TypeError):
+                continue
+
+        # Tenta parse flexível (sem dependências adicionais)
+        try:
+            parsed_iso = datetime.fromisoformat(data_text)
+            ano_corrente = datetime.now().year
+            return ano_corrente - parsed_iso.year
+        except Exception:
             return None
 
     def _definir_categoria(self, idade):
