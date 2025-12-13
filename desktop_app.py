@@ -1,6 +1,7 @@
 import customtkinter as ctk
 import tkinter as tk
 from tkinter import messagebox
+from tkinter import font as tkfont
 import requests
 import threading
 from datetime import datetime
@@ -512,23 +513,66 @@ class App(ctk.CTk):
 
         # Cabeçalhos (ordenados: Nome, depois Nível)
         headers = ['Nome', 'Nível', 'Idade', 'Categoria', 'Turma', 'Horário', 'Professor']
-        frame.grid_columnconfigure(0, weight=1)  # Coluna do nome com mais espaço (agora coluna 0)
+        # Maior peso para a coluna Nome, pequeno peso para Nível, demais fixos
+        frame.grid_columnconfigure(0, weight=2)
+        frame.grid_columnconfigure(1, weight=1)
+        for col in range(2, len(headers)):
+            frame.grid_columnconfigure(col, weight=0)
 
+        header_labels = []
         for i, header_text in enumerate(headers):
-            header_label = ctk.CTkLabel(frame, text=header_text, font=ctk.CTkFont(weight="bold"))
-            header_label.grid(row=0, column=i, padx=1, pady=1, sticky="ew")
+            # Fonte dos cabeçalhos reduzida em ~2pt para melhor densidade
+            # Alinha o cabeçalho 'Nome' à esquerda
+            anchor = 'w' if header_text == 'Nome' else 'center'
+            pad = (10, 5) if header_text == 'Nome' else (5, 5)
+            header_label = ctk.CTkLabel(frame, text=header_text, font=ctk.CTkFont(size=12, weight="bold"), anchor=anchor)
+            sticky_val = 'w' if anchor == 'w' else 'ew'
+            header_label.grid(row=0, column=i, padx=pad, pady=4, sticky=sticky_val)
+            header_labels.append(header_label)
 
         # Linhas de Alunos
         for row_idx, aluno in enumerate(alunos_para_exibir, start=1):
-            # Coluna 0: Nome
-            ctk.CTkLabel(frame, text=aluno.get('Nome', ''), anchor="w").grid(row=row_idx, column=0, padx=5, pady=2, sticky="ew")
-            # Coluna 1: Nível
-            ctk.CTkLabel(frame, text=aluno.get('Nível', ''), anchor="w").grid(row=row_idx, column=1, padx=5, pady=2, sticky="ew")
+            # Coluna 0: Nome (menos espaçamento à direita para aproximar do Nível)
+            name_lbl = ctk.CTkLabel(frame, text=aluno.get('Nome', ''), anchor="w")
+            name_lbl.grid(row=row_idx, column=0, padx=(10,3), pady=2, sticky="w")
+            # Coluna 1: Nível (centralizada)
+            nivel_lbl = ctk.CTkLabel(frame, text=aluno.get('Nível', ''), anchor="center")
+            nivel_lbl.grid(row=row_idx, column=1, padx=(3,10), pady=2, sticky="ew")
             ctk.CTkLabel(frame, text=str(aluno.get('Idade', '')), anchor="center").grid(row=row_idx, column=2, padx=5, pady=2, sticky="ew")
-            ctk.CTkLabel(frame, text=aluno.get('Categoria', ''), anchor="w").grid(row=row_idx, column=3, padx=5, pady=2, sticky="ew")
-            ctk.CTkLabel(frame, text=aluno.get('Turma', ''), anchor="w").grid(row=row_idx, column=4, padx=5, pady=2, sticky="ew")
-            ctk.CTkLabel(frame, text=aluno.get('Horário', ''), anchor="w").grid(row=row_idx, column=5, padx=5, pady=2, sticky="ew")
-            ctk.CTkLabel(frame, text=aluno.get('Professor', ''), anchor="w").grid(row=row_idx, column=6, padx=5, pady=2, sticky="ew")
+            ctk.CTkLabel(frame, text=aluno.get('Categoria', ''), anchor="center").grid(row=row_idx, column=3, padx=5, pady=2, sticky="ew")
+            ctk.CTkLabel(frame, text=aluno.get('Turma', ''), anchor="center").grid(row=row_idx, column=4, padx=5, pady=2, sticky="ew")
+            ctk.CTkLabel(frame, text=aluno.get('Horário', ''), anchor="center").grid(row=row_idx, column=5, padx=5, pady=2, sticky="ew")
+            ctk.CTkLabel(frame, text=aluno.get('Professor', ''), anchor="center").grid(row=row_idx, column=6, padx=5, pady=2, sticky="ew")
+
+        # Auto-ajusta largura mínima por coluna com base no conteúdo (como Excel)
+        try:
+            col_count = len(headers)
+            max_widths = [0] * col_count
+
+            # medir cabeçalhos
+            for i, lbl in enumerate(header_labels):
+                f = tkfont.Font(font=lbl.cget('font'))
+                w = f.measure(str(lbl.cget('text')))
+                max_widths[i] = max(max_widths[i], w)
+
+            # medir conteúdo: primeiro 50 linhas para eficiência
+            sample = alunos_para_exibir[:50]
+            keys = ['Nome','Nível','Idade','Categoria','Turma','Horário','Professor']
+            for row in sample:
+                for i in range(col_count):
+                    key = keys[i]
+                    text = str(row.get(key, ''))
+                    f = tkfont.Font(size=11)
+                    w = f.measure(text)
+                    if w > max_widths[i]:
+                        max_widths[i] = w
+
+            # aplica minsize com um padding extra
+            for i, w in enumerate(max_widths):
+                min_px = int(w + 24)
+                frame.grid_columnconfigure(i, minsize=min_px)
+        except Exception:
+            pass
 
     def _calcular_idade_no_ano(self, data_nasc_str):
         """Calcula a idade que o aluno fará no ano corrente."""
