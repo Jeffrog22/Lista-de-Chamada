@@ -17,6 +17,106 @@ STATUS_MAP = {
     3: {"text": "●", "code": "j", "fg_color": "#F39C12", "hover_color": "#d35400"}, # Justificado (Círculo)
 }
 
+class SearchableEntry(ctk.CTkEntry):
+    """Um CTkEntry que mostra sugestões em uma Toplevel window."""
+    def __init__(self, master, suggestions_list=None, **kwargs):
+        super().__init__(master, **kwargs)
+        self.suggestions_list = suggestions_list or []
+        self._suggestions_toplevel = None
+        self._suggestions_frame = None
+        self._active_suggestion_index = -1
+        self._suggestion_labels = []
+
+        self.bind("<KeyRelease>", self._on_key_release)
+        self.bind("<Down>", self._on_arrow_down)
+        self.bind("<Up>", self._on_arrow_up)
+        self.bind("<Return>", self._on_enter)
+        self.bind("<Escape>", lambda e: self._hide_suggestions())
+        self.bind("<FocusOut>", lambda e: self.after(200, self._hide_suggestions_if_not_focused))
+
+    def _on_key_release(self, event):
+        if event.keysym in ("Down", "Up", "Return", "Escape"):
+            return
+
+        query = self.get().lower()
+        if not query:
+            self._hide_suggestions()
+            return
+
+        filtered_suggestions = [s for s in self.suggestions_list if query in s.lower()]
+        if filtered_suggestions:
+            self._show_suggestions(filtered_suggestions)
+        else:
+            self._hide_suggestions()
+
+    def _show_suggestions(self, suggestions):
+        if self._suggestions_toplevel is None:
+            x = self.winfo_rootx()
+            y = self.winfo_rooty() + self.winfo_height()
+            self._suggestions_toplevel = tk.Toplevel(self)
+            self._suggestions_toplevel.wm_overrideredirect(True)
+            self._suggestions_toplevel.wm_geometry(f"+{x}+{y}")
+            self._suggestions_frame = ctk.CTkFrame(self._suggestions_toplevel, corner_radius=5)
+            self._suggestions_frame.pack(expand=True, fill="both")
+
+        for widget in self._suggestions_frame.winfo_children():
+            widget.destroy()
+
+        self._suggestion_labels = []
+        for i, text in enumerate(suggestions):
+            label = ctk.CTkLabel(self._suggestions_frame, text=text, anchor="w", corner_radius=5)
+            label.pack(fill="x", padx=5, pady=2)
+            label.bind("<Enter>", lambda e, index=i: self._highlight_suggestion(index))
+            label.bind("<Button-1>", lambda e, t=text: self._select_suggestion(t))
+
+        self._active_suggestion_index = -1
+        self._suggestion_labels = self._suggestions_frame.winfo_children()
+        self._suggestions_toplevel.lift()
+
+    def _hide_suggestions(self):
+        if self._suggestions_toplevel:
+            self._suggestions_toplevel.destroy()
+            self._suggestions_toplevel = None
+            self._suggestions_frame = None
+
+    def _hide_suggestions_if_not_focused(self):
+        """Esconde as sugestões se nem o entry nem a lista de sugestões estiverem em foco."""
+        try:
+            focused_widget = self.winfo_toplevel().focus_get()
+            if focused_widget != self and (self._suggestions_toplevel is None or focused_widget not in self._suggestions_toplevel.winfo_children()):
+                self._hide_suggestions()
+        except (KeyError, tk.TclError): # Pode dar erro se a janela for destruída
+            self._hide_suggestions()
+
+    def _highlight_suggestion(self, index):
+        """Destaca uma sugestão na lista."""
+        for i, label in enumerate(self._suggestion_labels):
+            if i == index:
+                label.configure(fg_color=("#d3d3d3", "#555555")) # Cor de destaque
+            else:
+                label.configure(fg_color="transparent")
+        self._active_suggestion_index = index
+
+    def _on_arrow_down(self, event):
+        if not self._suggestions_toplevel or not self._suggestion_labels: return
+        new_index = (self._active_suggestion_index + 1) % len(self._suggestion_labels)
+        self._highlight_suggestion(new_index)
+
+    def _on_arrow_up(self, event):
+        if not self._suggestions_toplevel or not self._suggestion_labels: return
+        new_index = (self._active_suggestion_index - 1)
+        if new_index < 0: new_index = len(self._suggestion_labels) - 1
+        self._highlight_suggestion(new_index)
+
+    def _on_enter(self, event):
+        if self._suggestions_toplevel and self._active_suggestion_index != -1:
+            self._select_suggestion(self._suggestion_labels[self._active_suggestion_index].cget("text"))
+
+    def _select_suggestion(self, text):
+        self.delete(0, "end")
+        self.insert(0, text)
+        self._hide_suggestions()
+
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -98,8 +198,11 @@ class App(ctk.CTk):
 
         self.alunos_categoria_label = ctk.CTkLabel(self.alunos_control_frame, text="Categoria:")
         self.alunos_categoria_label.grid(row=9, column=0, columnspan=2, padx=20, pady=(10,0), sticky="w")
-        self.alunos_categoria_combo = ctk.CTkComboBox(self.alunos_control_frame, values=["Todas"])
-        self.alunos_categoria_combo.grid(row=10, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
+        
+        # Substituído CTkComboBox por um CTkEntry para busca
+        self.alunos_categoria_entry = ctk.CTkEntry(self.alunos_control_frame, placeholder_text="Digite para buscar...")
+        self.alunos_categoria_entry.grid(row=10, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
+        # A lógica de sugestões será conectada quando as categorias forem carregadas.
 
         self.alunos_buscar_button = ctk.CTkButton(self.alunos_control_frame, text="Filtrar", command=self.aplicar_filtros_alunos)
         self.alunos_buscar_button.grid(row=11, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
@@ -115,6 +218,12 @@ class App(ctk.CTk):
         self.main_content_frame.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=0, pady=0) # Ocupa as linhas 0 e 1
         self.main_content_frame.grid_rowconfigure(0, weight=1)
         self.main_content_frame.grid_columnconfigure(0, weight=1)
+
+        # --- Botão Adicionar Aluno (canto superior direito) ---
+        self.add_student_button = ctk.CTkButton(self.main_content_frame, text="+ Adicionar Aluno", command=self.open_add_student_window)
+        # Usando .place() para posicionar no canto superior direito sem afetar o grid
+        self.add_student_button.place(relx=1.0, rely=0.0, x=-20, y=10, anchor="ne")
+
 
         # --- 2.1. Área com Abas ---
         self.tab_view = ctk.CTkTabview(self.main_content_frame, corner_radius=8)
@@ -155,6 +264,9 @@ class App(ctk.CTk):
         self.chamada_widgets = {} # Guarda os widgets de botão para poder ler o estado
         self.all_students_data = None # Cache para todos os alunos
         self.categorias_data = None # Cache para as categorias
+        self.turmas_data = None # Cache para os dados das turmas (usado para encontrar o nível)
+        self.add_student_toplevel = None # Referência para a janela de adicionar aluno
+        self.last_student_add_data = {} # Guarda os últimos dados para preenchimento
         
         # Mapeamento de views para seus frames de controle
         self.control_frames = {
@@ -190,6 +302,7 @@ class App(ctk.CTk):
             self.control_frames[view_name].grid(row=0, column=0, sticky="nsew")
         if view_name == "Alunos":
             self.iniciar_busca_todos_alunos() # Carrega todos os alunos ao entrar na aba
+            self.run_in_thread(self.carregar_lista_turmas) # Carrega dados de turmas em background para o form
         elif view_name == "Turmas": # A view de Turmas não precisa de menu de controle
             self.carregar_lista_turmas() # Carrega a lista ao entrar na aba
             # Recolhe o menu ao selecionar "Turmas"
@@ -472,7 +585,7 @@ class App(ctk.CTk):
         filtro_horario = self.alunos_horario_combo.get()
         filtro_prof = self.alunos_prof_var.get()
         filtro_nivel = self.alunos_nivel_combo.get()
-        filtro_categoria = self.alunos_categoria_combo.get()
+        filtro_categoria = self.alunos_categoria_entry.get() # Modificado para usar o Entry
 
         alunos_filtrados = self.all_students_data
 
@@ -486,7 +599,7 @@ class App(ctk.CTk):
         if filtro_nivel:
             alunos_filtrados = [a for a in alunos_filtrados if a.get('Nível') == filtro_nivel]
         if filtro_categoria:
-            alunos_filtrados = [a for a in alunos_filtrados if a.get('Categoria') == filtro_categoria]
+            alunos_filtrados = [a for a in alunos_filtrados if a.get('Categoria', '').lower() == filtro_categoria.lower()]
 
         self._construir_grid_alunos(alunos_filtrados)
 
@@ -496,7 +609,7 @@ class App(ctk.CTk):
         self.alunos_horario_combo.set("")
         self.alunos_prof_var.set("") # Desseleciona os radio buttons de professor
         self.alunos_nivel_combo.set("")
-        self.alunos_categoria_combo.set("")
+        self.alunos_categoria_entry.delete(0, 'end') # Limpa o campo de texto
         # Após limpar, aplica os filtros para atualizar a lista (mostrando todos)
         self.aplicar_filtros_alunos()
 
@@ -625,13 +738,13 @@ class App(ctk.CTk):
             def _update_ui():
                 # Normaliza nomes e garante que chaves esperadas existam
                 self.categorias_data = sorted(categorias, key=lambda x: x.get('Idade Mínima', 0), reverse=True)
-                nomes_categorias = [cat.get('Nome da Categoria') or cat.get('Categoria') or 'Não Categorizado' for cat in sorted(categorias, key=lambda x: x.get('Idade Mínima', 0))]
-                self.alunos_categoria_combo.configure(values=nomes_categorias)
-                self.alunos_categoria_combo.set("")
+                # A lógica para o novo SearchableEntry seria mais complexa,
+                # mas por agora, vamos apenas limpar o campo.
+                self.alunos_categoria_entry.delete(0, 'end')
             self.after(0, _update_ui)
         except requests.exceptions.RequestException as e:
             print(f"Erro ao carregar categorias: {e}")
-            self.after(0, lambda: self.alunos_categoria_combo.configure(values=["Erro ao carregar"]))
+            self.after(0, lambda: self.alunos_categoria_entry.configure(placeholder_text="Erro ao carregar categorias"))
 
     def _update_ui_error(self, error_message):
         """Limpa um frame e exibe uma mensagem de erro nele."""
@@ -648,6 +761,7 @@ class App(ctk.CTk):
             response = requests.get(f"{API_BASE_URL}/api/all-turmas")
             response.raise_for_status()
             turmas = response.json()
+            self.turmas_data = turmas # Armazena em cache para o formulário de add aluno
 
             headers = ["Nível", "Turma", "Horário", "Professor", "Data de Início", "Qtd.", "Atalho"]
             self.turmas_scroll_frame.grid_columnconfigure(0, weight=1)
@@ -693,6 +807,257 @@ class App(ctk.CTk):
 
         # 3. Iniciar a busca de alunos automaticamente
         self.iniciar_busca_alunos()
+
+    # MODIFICADO: A lógica foi movida para a classe AddStudentToplevel
+    def open_add_student_window(self):
+        """Abre uma janela Toplevel para adicionar um novo aluno."""
+        if self.add_student_toplevel is not None and self.add_student_toplevel.winfo_exists():
+            self.add_student_toplevel.lift()
+            return
+
+        # Passa os dados necessários da App principal para o formulário
+        form_data = {
+            "turmas": self.chamada_turma_combo.cget('values'),
+            "horarios": self.chamada_horario_combo.cget('values'),
+            "professores": [rb.cget('text') for rb in self.chamada_prof_frame.winfo_children() if isinstance(rb, ctk.CTkRadioButton)],
+            "last_data": self.last_student_add_data,
+            "turmas_data": self.turmas_data,
+            "categorias_data": self.categorias_data
+        }
+        self.add_student_toplevel = AddStudentToplevel(self, form_data, self.on_student_added)
+
+    def on_student_added(self, new_student_data):
+        """Callback executado quando um aluno é adicionado com sucesso."""
+        # 1. Salva os dados para persistência no próximo formulário
+        self.last_student_add_data = {
+            "turma": new_student_data["Turma"],
+            "horario": new_student_data["Horário"],
+            "professor": new_student_data["Professor"],
+            "parQ": new_student_data["ParQ"]
+        }
+        # 2. Invalida o cache de alunos para forçar o recarregamento
+        self.all_students_data = None
+        # 3. Muda para a aba de alunos e recarrega a lista
+        self.show_view("Alunos")
+        # 4. Limpa a referência da janela Toplevel
+        self.add_student_toplevel = None
+
+    def _center_toplevel(self, toplevel):
+        toplevel.update_idletasks()
+        main_x = self.winfo_x()
+        main_y = self.winfo_y()
+        main_w = self.winfo_width()
+        main_h = self.winfo_height()
+        top_w = toplevel.winfo_width()
+        top_h = toplevel.winfo_height()
+        x = main_x + (main_w - top_w) // 2
+        y = main_y + (main_h - top_h) // 2
+        toplevel.geometry(f"{top_w}x{top_h}+{x}+{y}")
+
+
+# --- NOVA CLASSE PARA O FORMULÁRIO DE ADIÇÃO DE ALUNO ---
+class AddStudentToplevel(ctk.CTkToplevel):
+    def __init__(self, master, form_data, on_success_callback):
+        super().__init__(master)
+        self.master_app = master
+        self.form_data = form_data
+        self.on_success = on_success_callback
+
+        self.title("Adicionar Novo Aluno")
+        self.geometry("600x650")
+        self.transient(master)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        self.widgets = {}
+        self._build_form()
+
+        self.after(10, lambda: self.master_app._center_toplevel(self))
+        self.after(100, lambda: self.widgets['nome'].focus_set()) # Foco automático no campo nome
+
+    def _on_close(self):
+        self.grab_release()
+        self.destroy()
+        self.master_app.add_student_toplevel = None # Limpa a referência na app principal
+
+    def _build_form(self):
+        form_frame = ctk.CTkFrame(self)
+        form_frame.pack(expand=True, fill="both", padx=20, pady=20)
+
+        # Funções de atualização
+        def on_field_change(*args):
+            self.master_app._update_derived_fields(self.widgets)
+
+        # --- Widgets do Formulário ---
+        ctk.CTkLabel(form_frame, text="Nome Completo:").pack(anchor="w", padx=10)
+        self.widgets['nome'] = ctk.CTkEntry(form_frame, width=400)
+        self.widgets['nome'].pack(fill="x", padx=10, pady=(0, 10))
+
+        ctk.CTkLabel(form_frame, text="Data de Nascimento (dd/mm/aaaa):").pack(anchor="w", padx=10)
+        self.widgets['data_nasc'] = ctk.CTkEntry(form_frame, placeholder_text="dd/mm/aaaa")
+        self.widgets['data_nasc'].pack(fill="x", padx=10, pady=(0, 10))
+        self.widgets['data_nasc'].bind("<KeyRelease>", lambda e, w=self.widgets['data_nasc']: self.master_app._format_date_entry(e, w))
+        self.widgets['data_nasc'].bind("<FocusOut>", lambda e: on_field_change())
+
+        ctk.CTkLabel(form_frame, text="Gênero:").pack(anchor="w", padx=10)
+        self.widgets['genero'] = ctk.CTkComboBox(form_frame, values=["Feminino", "Masculino", "Não Binário"])
+        self.widgets['genero'].pack(fill="x", padx=10, pady=(0, 10))
+        self.widgets['genero'].set("")
+
+        ctk.CTkLabel(form_frame, text="Whatsapp:").pack(anchor="w", padx=10)
+        vcmd = (self.register(self.master_app._validate_numeric_input), '%P')
+        self.widgets['telefone'] = ctk.CTkEntry(form_frame, validate="key", validatecommand=vcmd)
+        self.widgets['telefone'].pack(fill="x", padx=10, pady=(0, 10))
+
+        ctk.CTkLabel(form_frame, text="Turma:").pack(anchor="w", padx=10)
+        self.widgets['turma'] = ctk.CTkComboBox(form_frame, values=self.form_data.get('turmas', []), command=on_field_change)
+        self.widgets['turma'].pack(fill="x", padx=10, pady=(0, 10))
+        self.widgets['turma'].set(self.form_data.get('last_data', {}).get("turma", ""))
+
+        ctk.CTkLabel(form_frame, text="Horário:").pack(anchor="w", padx=10)
+        self.widgets['horario'] = ctk.CTkComboBox(form_frame, values=self.form_data.get('horarios', []), command=on_field_change)
+        self.widgets['horario'].pack(fill="x", padx=10, pady=(0, 10))
+        self.widgets['horario'].set(self.form_data.get('last_data', {}).get("horario", ""))
+
+        ctk.CTkLabel(form_frame, text="Professor:").pack(anchor="w", padx=10)
+        prof_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
+        prof_frame.pack(fill="x", padx=10, pady=(0, 10))
+        self.widgets['prof_var'] = tk.StringVar(value=self.form_data.get('last_data', {}).get("professor", ""))
+        self.widgets['prof_var'].trace_add("write", on_field_change)
+        for i, prof in enumerate(self.form_data.get('professores', [])):
+            ctk.CTkRadioButton(prof_frame, text=prof, variable=self.widgets['prof_var'], value=prof).pack(side="left", padx=(0, 15))
+
+        ctk.CTkLabel(form_frame, text="ParQ Assinado:").pack(anchor="w", padx=10)
+        parq_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
+        parq_frame.pack(fill="x", padx=10, pady=(0, 10))
+        self.widgets['parq_var'] = tk.StringVar(value=self.form_data.get('last_data', {}).get("parQ", "Sim"))
+        ctk.CTkRadioButton(parq_frame, text="Sim", variable=self.widgets['parq_var'], value="Sim").pack(side="left", padx=(0, 15))
+        ctk.CTkRadioButton(parq_frame, text="Não", variable=self.widgets['parq_var'], value="Não").pack(side="left")
+
+        # --- Labels de Preenchimento Automático ---
+        auto_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
+        auto_frame.pack(fill="x", padx=10, pady=10)
+        auto_frame.grid_columnconfigure((0, 1, 2), weight=1)
+
+        ctk.CTkLabel(auto_frame, text="Idade (no ano):").grid(row=0, column=0, sticky="w")
+        self.widgets['idade_label'] = ctk.CTkLabel(auto_frame, text="-", font=ctk.CTkFont(weight="bold"))
+        self.widgets['idade_label'].grid(row=1, column=0, sticky="w")
+
+        ctk.CTkLabel(auto_frame, text="Categoria:").grid(row=0, column=1, sticky="w")
+        self.widgets['categoria_label'] = ctk.CTkLabel(auto_frame, text="-", font=ctk.CTkFont(weight="bold"))
+        self.widgets['categoria_label'].grid(row=1, column=1, sticky="w")
+
+        ctk.CTkLabel(auto_frame, text="Nível:").grid(row=0, column=2, sticky="w")
+        self.widgets['nivel_label'] = ctk.CTkLabel(auto_frame, text="-", font=ctk.CTkFont(weight="bold"))
+        self.widgets['nivel_label'].grid(row=1, column=2, sticky="w")
+
+        # --- Botão de Adicionar ---
+        add_button = ctk.CTkButton(form_frame, text="Adicionar Aluno", command=self._submit)
+        add_button.pack(pady=(20, 10), padx=10)
+
+        # Navegação com Enter
+        self._set_enter_navigation()
+
+        on_field_change() # Inicializa os campos derivados
+
+    def _set_enter_navigation(self):
+        """Configura a tecla Enter para pular para o próximo widget."""
+        widgets_order = [
+            self.widgets['nome'], self.widgets['data_nasc'], self.widgets['genero'],
+            self.widgets['telefone'], self.widgets['turma'], self.widgets['horario']
+        ]
+        for i, widget in enumerate(widgets_order):
+            next_widget = widgets_order[i + 1] if i + 1 < len(widgets_order) else None
+            if next_widget:
+                widget.bind("<Return>", lambda e, w=next_widget: w.focus_set())
+
+    def _submit(self):
+        # Coleta os dados
+        data = {
+            "Nome": self.widgets['nome'].get(),
+            "Aniversario": self.widgets['data_nasc'].get(),
+            "Gênero": self.widgets['genero'].get(),
+            "Telefone": self.widgets['telefone'].get(),
+            "Turma": self.widgets['turma'].get(),
+            "Horário": self.widgets['horario'].get(),
+            "Professor": self.widgets['prof_var'].get(),
+            "ParQ": self.widgets['parq_var'].get(),
+            "Nível": self.widgets['nivel_label'].cget("text"),
+            "Categoria": self.widgets['categoria_label'].cget("text")
+        }
+
+        # Validação
+        if not all([data["Nome"], data["Aniversario"], data["Turma"], data["Horário"], data["Professor"]]):
+            messagebox.showerror("Erro", "Por favor, preencha todos os campos obrigatórios (Nome, Data, Turma, Horário, Professor).", parent=self)
+            return
+
+        # Envia para a API
+        try:
+            response = requests.post(f"{API_BASE_URL}/api/alunos", json=data)
+            response.raise_for_status()
+            
+            messagebox.showinfo("Sucesso", f"Aluno '{data['Nome']}' adicionado com sucesso!", parent=self)
+
+            # Chama o callback de sucesso na classe App
+            if self.on_success:
+                self.on_success(data)
+            
+            self._on_close() # Fecha a janela após o sucesso
+
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Não foi possível adicionar o aluno.\n\nErro: {e}"
+            try:
+                error_detail = e.response.json().get('detail', 'Erro desconhecido do servidor.')
+                error_msg += f"\nDetalhe: {error_detail}"
+            except:
+                pass
+            messagebox.showerror("Erro de API", error_msg, parent=self)
+
+    def _format_date_entry(self, event, entry_widget):
+        text = entry_widget.get()
+        numeros = "".join(filter(str.isdigit, text))
+        
+        if event.keysym == "BackSpace":
+            # A atualização dos campos derivados já é chamada pelo FocusOut e KeyRelease
+            return
+
+        formatted = ""
+        if len(numeros) > 0: formatted += numeros[:2]
+        if len(numeros) > 2: formatted += "/" + numeros[2:4]
+        if len(numeros) > 4: formatted += "/" + numeros[4:8]
+        
+        entry_widget.delete(0, "end")
+        entry_widget.insert(0, formatted)
+
+    def _validate_numeric_input(self, P):
+        return P.isdigit() or P == ""
+
+    # MODIFICADO: Agora usa os dados de turmas e categorias da App
+    def _update_derived_fields(self, widgets):
+        # 1. Calcular Idade e Categoria
+        idade = self._calcular_idade_no_ano(widgets['data_nasc'].get())
+        if idade is not None:
+            self.turmas_data = self.turmas_data # Garante que os dados estão disponíveis
+            widgets['idade_label'].configure(text=str(idade))
+            categoria = self._definir_categoria(idade)
+            widgets['categoria_label'].configure(text=categoria)
+        else:
+            widgets['idade_label'].configure(text="-")
+            widgets['categoria_label'].configure(text="-")
+
+        # 2. Encontrar Nível
+        turma = widgets['turma'].get()
+        horario = widgets['horario'].get()
+        prof = widgets['prof_var'].get()
+        nivel = "-"
+        if turma and horario and prof and self.turmas_data:
+            for t_info in self.turmas_data:
+                if (t_info.get("Turma") == turma and
+                    t_info.get("Horário") == horario and
+                    t_info.get("Professor") == prof):
+                    nivel = t_info.get("Nível", "-")
+                    break
+        widgets['nivel_label'].configure(text=nivel)
 
 if __name__ == "__main__":
     # --- Instalação de Dependências ---

@@ -1,0 +1,185 @@
+[33mcommit 53006aa5b0c98d5e77ef9a8cb910009faad9d8df[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Sat Dec 13 23:47:12 2025 -0300
+
+    Make Comboboxes readonly to prevent typing; improve keyboard navigation UX
+
+[33mcommit 11cdd9c10ccbcacc30b23e5e86a5f394430c1763[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Sat Dec 13 23:46:58 2025 -0300
+
+    Make Comboboxes readonly to prevent typing; improve keyboard navigation UX
+
+[33mcommit 2d53b41b0e88e05df4847b1a13c5740a3bc0ca12[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Sat Dec 13 23:43:16 2025 -0300
+
+    Fix: don't intercept Listbox events; focus dropdown listbox after opening; make bindings safe (capture self)
+
+[33mcommit ebaf71fd1a244a856c707857806bdd30c313c47a[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Sat Dec 13 23:39:21 2025 -0300
+
+    Fix: make _suppress_close and _maybe_close_card_on_focus_out class methods to avoid AttributeError in bindings
+
+[33mcommit 63bd8fa073a2f7165683aea5b60e237d02dc964a[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Sat Dec 13 23:35:27 2025 -0300
+
+    Fix: detect combo descendants so Tab-focus + Up/Down opens dropdowns
+
+[33mcommit 48bb5f36032b6080e632550b6ebf63efccfff575[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Sat Dec 13 23:30:01 2025 -0300
+
+    Fix: filter test artifacts; sanitize last-add state; make Tab+Up/Down open combos
+
+[33mcommit 7fc3c98311be731de6fe2f7a8dd2af8efc85561e[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Sat Dec 13 23:22:23 2025 -0300
+
+    Fix: remove automatic Turma/Horário defaults; filter test artifacts; allow Up/Down to open combos
+
+[33mcommit d9af2184f22e3886ceb0b509c201edcac0bec790[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Sat Dec 13 23:10:48 2025 -0300
+
+    Fix: preserve cursor for birthday auto-format; format Whatsapp as (##) # ####-#### and preserve cursor
+
+[33mcommit 6960b4f76ed219c20b00ce7665341a7f34316872[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Sat Dec 13 17:16:20 2025 -0300
+
+    UI: restore add-student card if hidden (deiconify/lift/focus) when re-opening
+
+[33mcommit 40075cb5aa6aceb2f4a07d0c983936764d4f0f9f[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Sat Dec 13 16:59:48 2025 -0300
+
+    UI: simplify add-student to single card window; fix submit flow (append student, refresh UI, close card) and remove overlay
+
+[33mcommit 8fde886de811606b1db9c7165179561a66380e7a[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Sat Dec 13 16:55:34 2025 -0300
+
+    UI: align second label column, make card wrap content and fit window to content
+
+[33mcommit c177820e8e6bfdb2ad294f5aed711bc334ce6d1b[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Sat Dec 13 16:52:48 2025 -0300
+
+    UI: increase horizontal spacing for Gênero, parQ and Turma controls
+
+[33mcommit edc506d788a28df8e7c17a12a490f6b9ded2b522[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Sat Dec 13 16:49:47 2025 -0300
+
+    UI: aproximar controles (Gênero/parQ/Turma) e corrigir comportamento do modal de adicionar aluno (focus, fechar, alinhamento)
+
+[33mcommit 51ab5ab0965ea466b0af30062f44a158d27d4329[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Sat Dec 13 16:14:37 2025 -0300
+
+    UI: make add-student overlay modal (Toplevel) and card border to visually separate from grid; bind Esc to close
+
+[33mcommit f727735ea6ff5545b3892256f63952801ba9cc4c[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Sat Dec 13 16:10:43 2025 -0300
+
+    UX: Add 'Adicionar Alunos' modal; layout fixes; header sorting; category search improvements
+
+[33mcommit 91cfbdb77b496000075dd24d1de4cb16626cde05[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Sat Dec 13 14:42:20 2025 -0300
+
+    Feature: add POST /api/alunos to create student (creates Gênero column if missing) + UI: 'Adicionar Alunos' button and add-student card with auto computed fields
+
+[33mcommit 508e5c301a43775e8e5cb2f236ffed94e44f7b17[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Sat Dec 13 11:29:10 2025 -0300
+
+    UX: add header-clear button for Alunos; preserve base order when sorting; clear resets order and arrow
+
+[33mcommit 2641c10ca3c4982e0e59df487af0d8f06cbd7510[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Sat Dec 13 11:28:43 2025 -0300
+
+    UX: add small 'clear header sort' button for Alunos and preserve base order; sorting acts on display copy only
+
+[33mcommit 1f5ffdd5281a24b73eb5f0ff755f8e4f13c32099[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Sat Dec 13 00:59:33 2025 -0300
+
+    UI: align Nível/Categoria horizontally; category entry overlay + Up/Down navigation; minor UX fixes
+
+[33mcommit e6246ca67a198f5c9309ed29287a3b7b0f3ce7c3[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Fri Dec 12 23:06:20 2025 -0300
+
+    UI: melhorar busca de Categorias  carregar sob demanda, normalizar (remover acentos), priorizar prefix matches
+
+[33mcommit 0366c8027a9ff8a92ea69c89b5537a42d2237432[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Fri Dec 12 23:02:37 2025 -0300
+
+    UI: labels for Turma/Horário; replace Categoria combo with searchable entry + suggestions; adapt filters
+
+[33mcommit feadcaf8197ff77ee5e645fedd994237bc638c86[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Fri Dec 12 22:48:50 2025 -0300
+
+    UI: auto-ajuste de colunas no grid Alunos; centraliza colunas (exceto Nome) e ajusta espaçamento
+
+[33mcommit 8085f76c875ac0b26ccdf52a0ae54330d94aa1a9[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Fri Dec 12 22:37:28 2025 -0300
+
+    Corrige lógica de categorização no app desktop (usar maior Idade Mínima aplicável)
+
+[33mcommit 3cbaa0b1e9d6ae549e2a749ab3b11b1c70be54c2[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Fri Dec 12 22:25:47 2025 -0300
+
+    Corrige endpoints e payloads; melhora desktop UI e filtros; adiciona README e requirements
+
+[33mcommit f8356221fa65cc5ebd6abe46f115c0ad42b3bd18[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Thu Dec 11 19:53:38 2025 -0300
+
+    versão limpa4
+
+[33mcommit 651d417d6542c6a91bc69103f732780ec9b12531[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Tue Dec 9 20:07:52 2025 -0300
+
+    versão limpa3
+
+[33mcommit 4da11ec4b2f6be68083faa316ebd4dffbc9a8d82[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Tue Dec 9 18:25:35 2025 -0300
+
+    versão limpa2
+
+[33mcommit 12b8ca579eb824d614740fbbff3042a74a4d559f[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Tue Dec 9 10:53:25 2025 -0300
+
+    versão limpa1
+
+[33mcommit e84be6fa0c67157a94f2c2cd4437f3ab5b2f26ec[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Tue Dec 9 02:23:51 2025 -0300
+
+    deu ruim
+
+[33mcommit 2fd9f0739aec98c3658f87ea79db7aa21170e33a[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Mon Dec 8 20:49:52 2025 -0300
+
+    Minha primeira versão com CustomTkinter
+
+[33mcommit 476434dfcf8fa4200c87d45b59c3cbb1dea3ef98[m
+Author: JeffMelo <jeffux@hotmail.com>
+Date:   Mon Dec 8 16:56:00 2025 -0300
+
+    Ponto de Restauração: Versão inicial com CustomTkinter
