@@ -219,19 +219,19 @@ class App(ctk.CTk):
         self.main_content_frame.grid_rowconfigure(0, weight=1)
         self.main_content_frame.grid_columnconfigure(0, weight=1)
 
-        # --- Botão Adicionar Aluno (canto superior direito) ---
-        self.add_student_button = ctk.CTkButton(self.main_content_frame, text="+ Adicionar Aluno", command=self.open_add_student_window)
-        # Usando .place() para posicionar no canto superior direito sem afetar o grid
-        self.add_student_button.place(relx=1.0, rely=0.0, x=-20, y=10, anchor="ne")
-
-
-        # --- 2.1. Área com Abas ---
+        # --- 2.1. Criação da TabView ---
         self.tab_view = ctk.CTkTabview(self.main_content_frame, corner_radius=8)
-        self.tab_view.grid(row=0, column=0, padx=20, pady=(10, 20), sticky="nsew")
+        self.tab_view.grid(row=0, column=0, padx=20, pady=(0, 20), sticky="nsew")
         self.tab_view.add("Chamada")
+
         self.tab_view.add("Alunos")
         self.tab_view.add("Turmas")
         self.tab_view.set("Chamada") 
+
+        # --- Botão Adicionar Aluno (canto superior direito, sobreposto) ---
+        # Movido para ser filho da janela principal (self) para não ser coberto pelo tab_view
+        self.add_student_button = ctk.CTkButton(self, text="+ Adicionar Aluno", command=self.open_add_student_window)
+        self.add_student_button.place(relx=1.0, rely=0.0, x=-20, y=10, anchor="ne")
 
         # --- 2.2. Conteúdo da Aba "Chamada" ---
         self.tab_view.tab("Chamada").grid_columnconfigure(0, weight=1)
@@ -330,17 +330,21 @@ class App(ctk.CTk):
 
                 def _update_ui(): # Função para atualizar a UI na thread principal
                     turmas = data.get('turmas', []) or []
-                    horarios = data.get('horarios', []) or []
+                    
+                    # Ordena os horários (ex: "08:00-09:00")
+                    horarios_brutos = data.get('horarios', []) or []
+                    horarios_ordenados = sorted(horarios_brutos, key=lambda h: (int(h.split(':')[0]), int(h.split(':')[1].split('-')[0])) if ':' in h else h)
+
                     self.chamada_turma_combo.configure(values=turmas)
                     self.chamada_turma_combo.set(turmas[0] if turmas else "")
-                    self.chamada_horario_combo.configure(values=horarios)
-                    self.chamada_horario_combo.set(horarios[0] if horarios else "")
+                    self.chamada_horario_combo.configure(values=horarios_ordenados)
+                    self.chamada_horario_combo.set(horarios_ordenados[0] if horarios_ordenados else "")
                     professores = data.get('professores', [])
                     self._criar_radio_professores(professores)
                     # Remove a opção "Todos" e define um valor padrão vazio
                     self.alunos_turma_combo.configure(values=data.get('turmas', []))
                     self.alunos_turma_combo.set("")
-                    self.alunos_horario_combo.configure(values=data.get('horarios', []))
+                    self.alunos_horario_combo.configure(values=horarios_ordenados)
                     self.alunos_horario_combo.set("")
                     niveis = data.get('niveis', [])
                     self.alunos_nivel_combo.configure(values=niveis)
@@ -687,47 +691,6 @@ class App(ctk.CTk):
         except Exception:
             pass
 
-    def _calcular_idade_no_ano(self, data_nasc_str):
-        """Calcula a idade que o aluno fará no ano corrente."""
-        if not data_nasc_str:
-            return None
-
-        # Se já for um objeto datetime
-        if isinstance(data_nasc_str, datetime):
-            ano_corrente = datetime.now().year
-            return ano_corrente - data_nasc_str.year
-
-        data_text = str(data_nasc_str)
-        # Tenta formatos possíveis: dd/mm/YYYY, ISO (YYYY-mm-ddT...), ou apenas YYYY-mm-dd
-        for fmt in ('%d/%m/%Y', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d'):
-            try:
-                parsed = datetime.strptime(data_text.split('T')[0] if 'T' in data_text else data_text, fmt.split('T')[0])
-                ano_corrente = datetime.now().year
-                return ano_corrente - parsed.year
-            except (ValueError, TypeError):
-                continue
-
-        # Tenta parse flexível (sem dependências adicionais)
-        try:
-            parsed_iso = datetime.fromisoformat(data_text)
-            ano_corrente = datetime.now().year
-            return ano_corrente - parsed_iso.year
-        except Exception:
-            return None
-
-    def _definir_categoria(self, idade):
-        """Define a categoria do aluno com base na idade e nos dados de categoria em cache."""
-        if idade is None or self.categorias_data is None:
-            return 'Não Categorizado'
-        
-        categoria_adequada = 'Não Categorizado'
-        for cat in self.categorias_data:
-            if idade >= cat.get('Idade Mínima', 0):
-                categoria_adequada = cat.get('Nome da Categoria') or cat.get('Categoria') or categoria_adequada
-            else:
-                break # Como a lista está ordenada, podemos parar
-        return categoria_adequada
-
     def carregar_categorias(self):
         """Busca as categorias da API e as armazena em cache."""
         try:
@@ -886,7 +849,7 @@ class AddStudentToplevel(ctk.CTkToplevel):
 
         # Funções de atualização
         def on_field_change(*args):
-            self.master_app._update_derived_fields(self.widgets)
+            self._update_derived_fields(self.widgets)
 
         # --- Widgets do Formulário ---
         ctk.CTkLabel(form_frame, text="Nome Completo:").pack(anchor="w", padx=10)
@@ -896,7 +859,7 @@ class AddStudentToplevel(ctk.CTkToplevel):
         ctk.CTkLabel(form_frame, text="Data de Nascimento (dd/mm/aaaa):").pack(anchor="w", padx=10)
         self.widgets['data_nasc'] = ctk.CTkEntry(form_frame, placeholder_text="dd/mm/aaaa")
         self.widgets['data_nasc'].pack(fill="x", padx=10, pady=(0, 10))
-        self.widgets['data_nasc'].bind("<KeyRelease>", lambda e, w=self.widgets['data_nasc']: self.master_app._format_date_entry(e, w))
+        self.widgets['data_nasc'].bind("<KeyRelease>", lambda e, w=self.widgets['data_nasc']: self._format_date_entry(e, w))
         self.widgets['data_nasc'].bind("<FocusOut>", lambda e: on_field_change())
 
         ctk.CTkLabel(form_frame, text="Gênero:").pack(anchor="w", padx=10)
@@ -905,8 +868,8 @@ class AddStudentToplevel(ctk.CTkToplevel):
         self.widgets['genero'].set("")
 
         ctk.CTkLabel(form_frame, text="Whatsapp:").pack(anchor="w", padx=10)
-        vcmd = (self.register(self.master_app._validate_numeric_input), '%P')
-        self.widgets['telefone'] = ctk.CTkEntry(form_frame, validate="key", validatecommand=vcmd)
+        self.widgets['telefone'] = ctk.CTkEntry(form_frame)
+        self.widgets['telefone'].bind("<KeyRelease>", self._format_phone_entry)
         self.widgets['telefone'].pack(fill="x", padx=10, pady=(0, 10))
 
         ctk.CTkLabel(form_frame, text="Turma:").pack(anchor="w", padx=10)
@@ -1014,30 +977,75 @@ class AddStudentToplevel(ctk.CTkToplevel):
             messagebox.showerror("Erro de API", error_msg, parent=self)
 
     def _format_date_entry(self, event, entry_widget):
+        # Ignora teclas de controle que não modificam o texto
+        if event.keysym not in ("BackSpace", "Delete") and len(event.char) == 0:
+            return
+
+        cursor_pos = entry_widget.index(tk.INSERT)
         text = entry_widget.get()
         numeros = "".join(filter(str.isdigit, text))
         
         if event.keysym == "BackSpace":
-            # A atualização dos campos derivados já é chamada pelo FocusOut e KeyRelease
-            return
+            # Lógica para ajustar o cursor ao apagar perto de um "/"
+            if cursor_pos > 0 and text[cursor_pos - 1] == '/':
+                cursor_pos -= 1
 
         formatted = ""
-        if len(numeros) > 0: formatted += numeros[:2]
+        old_len = len(text)
+
+        if len(numeros) > 0: formatted = numeros[:2]
         if len(numeros) > 2: formatted += "/" + numeros[2:4]
         if len(numeros) > 4: formatted += "/" + numeros[4:8]
         
         entry_widget.delete(0, "end")
         entry_widget.insert(0, formatted)
 
-    def _validate_numeric_input(self, P):
-        return P.isdigit() or P == ""
+        # Restaura a posição do cursor, ajustando para a adição/remoção de barras
+        new_len = len(formatted)
+        cursor_delta = new_len - old_len
+        new_cursor_pos = cursor_pos + cursor_delta if cursor_delta > 0 else cursor_pos
+        entry_widget.icursor(min(new_cursor_pos, new_len))
+
+    def _format_phone_entry(self, event):
+        """Formata o número de telefone no formato (##) # ####-#### enquanto o usuário digita."""
+        # Ignora teclas de controle (exceto Backspace, que é tratado pela remoção de não-dígitos)
+        if event.keysym not in ("BackSpace", "Delete") and len(event.char) == 0:
+            return
+
+        entry_widget = event.widget
+        # Salva a posição do cursor e o texto ANTES de qualquer modificação
+        cursor_pos = entry_widget.index(tk.INSERT)
+        text = entry_widget.get()
+        old_len = len(text)
+
+        numeros = "".join(filter(str.isdigit, text))
+        numeros = numeros[:11]
+
+        formatted = ""
+        if len(numeros) > 0:
+            formatted = f"({numeros[:2]}"
+        if len(numeros) > 2:
+            # Adiciona o nono dígito
+            formatted = f"({numeros[:2]}) {numeros[2:3]}"
+        if len(numeros) > 3:
+            # Adiciona os 4 dígitos seguintes
+            formatted = f"({numeros[:2]}) {numeros[2:3]} {numeros[3:7]}"
+        if len(numeros) > 7:
+            # Adiciona o hífen e os 4 dígitos finais
+            formatted = f"({numeros[:2]}) {numeros[2:3]} {numeros[3:7]}-{numeros[7:11]}"
+        
+        entry_widget.delete(0, "end")
+        entry_widget.insert(0, formatted)
+
+        # Restaura a posição do cursor, ajustando para a adição de caracteres de formatação
+        new_len = len(formatted)
+        entry_widget.icursor(min(new_len, cursor_pos + (new_len - old_len)))
 
     # MODIFICADO: Agora usa os dados de turmas e categorias da App
     def _update_derived_fields(self, widgets):
         # 1. Calcular Idade e Categoria
         idade = self._calcular_idade_no_ano(widgets['data_nasc'].get())
         if idade is not None:
-            self.turmas_data = self.turmas_data # Garante que os dados estão disponíveis
             widgets['idade_label'].configure(text=str(idade))
             categoria = self._definir_categoria(idade)
             widgets['categoria_label'].configure(text=categoria)
@@ -1050,14 +1058,56 @@ class AddStudentToplevel(ctk.CTkToplevel):
         horario = widgets['horario'].get()
         prof = widgets['prof_var'].get()
         nivel = "-"
-        if turma and horario and prof and self.turmas_data:
-            for t_info in self.turmas_data:
+        if turma and horario and prof and self.form_data.get('turmas_data'):
+            for t_info in self.form_data.get('turmas_data'):
                 if (t_info.get("Turma") == turma and
                     t_info.get("Horário") == horario and
                     t_info.get("Professor") == prof):
                     nivel = t_info.get("Nível", "-")
                     break
         widgets['nivel_label'].configure(text=nivel)
+
+    def _calcular_idade_no_ano(self, data_nasc_str):
+        """Calcula a idade que o aluno fará no ano corrente."""
+        if not data_nasc_str:
+            return None
+
+        # Se já for um objeto datetime
+        if isinstance(data_nasc_str, datetime):
+            ano_corrente = datetime.now().year
+            return ano_corrente - data_nasc_str.year
+
+        data_text = str(data_nasc_str)
+        # Tenta formatos possíveis: dd/mm/YYYY, ISO (YYYY-mm-ddT...), ou apenas YYYY-mm-dd
+        for fmt in ('%d/%m/%Y', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d'):
+            try:
+                parsed = datetime.strptime(data_text.split('T')[0] if 'T' in data_text else data_text, fmt.split('T')[0])
+                ano_corrente = datetime.now().year
+                return ano_corrente - parsed.year
+            except (ValueError, TypeError):
+                continue
+
+        # Tenta parse flexível (sem dependências adicionais)
+        try:
+            parsed_iso = datetime.fromisoformat(data_text)
+            ano_corrente = datetime.now().year
+            return ano_corrente - parsed_iso.year
+        except Exception:
+            return None
+
+    def _definir_categoria(self, idade):
+        """Define a categoria do aluno com base na idade e nos dados de categoria em cache."""
+        categorias_data = self.form_data.get('categorias_data')
+        if idade is None or categorias_data is None:
+            return 'Não Categorizado'
+        
+        categoria_adequada = 'Não Categorizado'
+        for cat in categorias_data:
+            if idade >= cat.get('Idade Mínima', 0):
+                categoria_adequada = cat.get('Nome da Categoria') or cat.get('Categoria') or categoria_adequada
+            else:
+                break # Como a lista está ordenada, podemos parar
+        return categoria_adequada
 
 if __name__ == "__main__":
     # --- Instalação de Dependências ---
