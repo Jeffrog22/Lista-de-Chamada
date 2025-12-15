@@ -173,45 +173,6 @@ class App(ctk.CTk):
         self.chamada_back_button = ctk.CTkButton(self.chamada_control_frame, text="< Voltar ao Menu", command=self.show_main_menu, fg_color="transparent", border_width=1)
         self.chamada_back_button.grid(row=7, column=0, columnspan=2, padx=20, pady=(20, 10), sticky="s")
 
-        # --- 1.3. Frame do Menu de Controle de ALUNOS (inicialmente oculto) ---
-        self.alunos_control_frame = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
-        # (grid é chamado em show_view)
-        self.alunos_control_label = ctk.CTkLabel(self.alunos_control_frame, text="Filtros de Alunos", font=ctk.CTkFont(size=16, weight="bold"))
-        self.alunos_control_label.grid(row=0, column=0, columnspan=2, padx=20, pady=(20, 10))
-
-        self.alunos_turma_combo = ctk.CTkComboBox(self.alunos_control_frame, values=["Carregando..."])
-        self.alunos_turma_combo.grid(row=1, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
-        self.alunos_horario_combo = ctk.CTkComboBox(self.alunos_control_frame, values=["Carregando..."])
-        self.alunos_horario_combo.grid(row=2, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
-
-        self.alunos_prof_label = ctk.CTkLabel(self.alunos_control_frame, text="Professor(a):")
-        self.alunos_prof_label.grid(row=3, column=0, columnspan=2, padx=20, pady=(10,0), sticky="w")
-        self.alunos_prof_var = tk.StringVar()
-        self.alunos_prof_frame = ctk.CTkFrame(self.alunos_control_frame, fg_color="transparent") # Frame para os radio buttons
-        self.alunos_prof_frame.grid(row=4, column=0, columnspan=2, padx=20, pady=5, sticky="ew")
-
-
-        self.alunos_nivel_label = ctk.CTkLabel(self.alunos_control_frame, text="Nível:")
-        self.alunos_nivel_label.grid(row=5, column=0, columnspan=2, padx=20, pady=(10,0), sticky="w")
-        self.alunos_nivel_combo = ctk.CTkComboBox(self.alunos_control_frame, values=["Todos"])
-        self.alunos_nivel_combo.grid(row=6, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
-
-        self.alunos_categoria_label = ctk.CTkLabel(self.alunos_control_frame, text="Categoria:")
-        self.alunos_categoria_label.grid(row=9, column=0, columnspan=2, padx=20, pady=(10,0), sticky="w")
-        
-        # MODIFICADO: Usa a classe SearchableEntry para o filtro de categoria
-        self.alunos_categoria_entry = SearchableEntry(self.alunos_control_frame, placeholder_text="Digite para buscar categoria...")
-        self.alunos_categoria_entry.grid(row=10, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
-
-        self.alunos_buscar_button = ctk.CTkButton(self.alunos_control_frame, text="Filtrar", command=self.aplicar_filtros_alunos)
-        self.alunos_buscar_button.grid(row=11, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
-
-        self.alunos_limpar_button = ctk.CTkButton(self.alunos_control_frame, text="Limpar Filtros", command=self.limpar_filtros_alunos, fg_color="transparent", border_width=1)
-        self.alunos_limpar_button.grid(row=12, column=0, columnspan=2, padx=20, pady=(0, 10), sticky="ew")
-
-        self.alunos_back_button = ctk.CTkButton(self.alunos_control_frame, text="< Voltar ao Menu", command=self.show_main_menu, fg_color="transparent", border_width=1)
-        self.alunos_back_button.grid(row=13, column=0, columnspan=2, padx=20, pady=(20, 10), sticky="s")
-
         # --- 2. ÁREA PRINCIPAL (MAIN CONTENT) ---
         self.main_content_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
         self.main_content_frame.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=0, pady=0) # Ocupa as linhas 0 e 1
@@ -244,10 +205,19 @@ class App(ctk.CTk):
         self.chamada_scroll_frame.grid(row=1, column=0, columnspan=2, sticky="nsew")
 
         # --- 2.3. Conteúdo da Aba "Alunos" ---
+        # Configura o grid da aba Alunos para ter uma linha para a busca e outra para a lista
         self.tab_view.tab("Alunos").grid_columnconfigure(0, weight=1)
-        self.tab_view.tab("Alunos").grid_rowconfigure(0, weight=1)
+        self.tab_view.tab("Alunos").grid_rowconfigure(0, weight=0) # Linha da busca (altura fixa)
+        self.tab_view.tab("Alunos").grid_rowconfigure(1, weight=1) # Linha da lista (expansível)
+
+        # Widget de busca por nome na aba Alunos
+        self.alunos_search_entry = ctk.CTkEntry(self.tab_view.tab("Alunos"), placeholder_text="Buscar por nome...")
+        self.alunos_search_entry.grid(row=0, column=0, padx=10, pady=10, sticky="w")
+        self.alunos_search_entry.bind("<KeyRelease>", self.filtrar_alunos_por_nome)
+
+        # Scroll frame para a lista de alunos
         self.alunos_scroll_frame = ctk.CTkScrollableFrame(self.tab_view.tab("Alunos"), label_text="Cadastro Geral de Alunos")
-        self.alunos_scroll_frame.grid(row=0, column=0, sticky="nsew")
+        self.alunos_scroll_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
 
         # --- 2.4. Conteúdo da Aba "Turmas" ---
         self.tab_view.tab("Turmas").grid_columnconfigure(0, weight=1)
@@ -270,7 +240,6 @@ class App(ctk.CTk):
         # Mapeamento de views para seus frames de controle
         self.control_frames = {
             "Chamada": self.chamada_control_frame,
-            "Alunos": self.alunos_control_frame,
         }
 
         # --- INICIALIZAÇÃO ---
@@ -302,6 +271,9 @@ class App(ctk.CTk):
             self.control_frames[view_name].grid(row=0, column=0, sticky="nsew")
         if view_name == "Alunos":
             self.iniciar_busca_todos_alunos() # Carrega todos os alunos ao entrar na aba
+            # Recolhe o menu ao selecionar "Alunos"
+            if self.sidebar_is_open:
+                self.toggle_sidebar()
         elif view_name == "Turmas": # A view de Turmas não precisa de menu de controle
             self.carregar_lista_turmas() # Carrega a lista ao entrar na aba
             # Recolhe o menu ao selecionar "Turmas"
@@ -340,15 +312,6 @@ class App(ctk.CTk):
                     self.chamada_horario_combo.set(horarios_ordenados[0] if horarios_ordenados else "")
                     professores = data.get('professores', [])
                     self._criar_radio_professores(professores)
-                    # Remove a opção "Todos" e define um valor padrão vazio
-                    self.alunos_turma_combo.configure(values=data.get('turmas', []))
-                    self.alunos_turma_combo.set("")
-                    self.alunos_horario_combo.configure(values=horarios_ordenados)
-                    self.alunos_horario_combo.set("")
-                    niveis = data.get('niveis', [])
-                    self.alunos_nivel_combo.configure(values=niveis)
-                    self.alunos_nivel_combo.set("")
-                    self.carregar_categorias() # Inicia o carregamento das categorias
                 self.after(0, _update_ui) # Agenda a atualização da UI
 
             except requests.exceptions.RequestException as e:
@@ -361,16 +324,12 @@ class App(ctk.CTk):
         """Cria os botões de rádio para professores dinamicamente."""
         # Limpa frames antigos
         for widget in self.chamada_prof_frame.winfo_children(): widget.destroy()
-        for widget in self.alunos_prof_frame.winfo_children(): widget.destroy()
 
         for i, prof in enumerate(professores):
             ctk.CTkRadioButton(self.chamada_prof_frame, text=prof, variable=self.chamada_prof_var, value=prof).grid(row=0, column=i, padx=(0, 15), sticky="w")
-            ctk.CTkRadioButton(self.alunos_prof_frame, text=prof, variable=self.alunos_prof_var, value=prof).grid(row=0, column=i, padx=(0, 15), sticky="w")
         
         if professores:
             self.chamada_prof_var.set(professores[0])
-            # Por padrão, nenhum professor é selecionado no filtro de alunos
-            self.alunos_prof_var.set("")
 
     def iniciar_busca_alunos(self):
         self.chamada_info_label.configure(text="Buscando dados...")
@@ -525,7 +484,7 @@ class App(ctk.CTk):
             self.run_in_thread(self.buscar_e_processar_todos_alunos)
         else:
             # Se já tem cache, apenas exibe
-            self.aplicar_filtros_alunos()
+            self.filtrar_alunos_por_nome() # Apenas filtra a lista existente
 
     def buscar_e_processar_todos_alunos(self):
         """Busca todos os alunos da API e processa os dados (idade, categoria)."""
@@ -567,54 +526,24 @@ class App(ctk.CTk):
             # Extrai os níveis únicos da lista de alunos carregada
             niveis_unicos = sorted(list(set(a.get('Nível') for a in alunos if a.get('Nível'))))
 
+            
             # Após carregar, constrói o grid com TODOS os alunos
             def _update_ui_after_load():
-                self.alunos_nivel_combo.configure(values=niveis_unicos) # Popula o filtro de nível
                 self._construir_grid_alunos(self.all_students_data)
             self.after(0, _update_ui_after_load)
 
         except requests.exceptions.RequestException as e:
             # Passa a exceção 'e' para a função de atualização da UI
             self.after(0, self._update_ui_error, e)
-
-    def aplicar_filtros_alunos(self):
-        """Filtra os dados dos alunos em cache e reconstrói a grade."""
+            
+    def filtrar_alunos_por_nome(self, event=None):
+        """Filtra a lista de alunos na aba 'Alunos' com base no texto da caixa de busca."""
         if not self.all_students_data:
-            self.iniciar_busca_todos_alunos()
-            return
+            return # Não faz nada se os dados ainda não foram carregados
 
-        # Coleta os valores dos filtros
-        filtro_turma = self.alunos_turma_combo.get()
-        filtro_horario = self.alunos_horario_combo.get()
-        filtro_prof = self.alunos_prof_var.get()
-        filtro_nivel = self.alunos_nivel_combo.get()
-        filtro_categoria = self.alunos_categoria_entry.get() # Modificado para usar o Entry
-
-        alunos_filtrados = self.all_students_data
-
-        # Aplica cada filtro
-        if filtro_turma: # Só filtra se um valor for selecionado
-            alunos_filtrados = [a for a in alunos_filtrados if a.get('Turma') == filtro_turma]
-        if filtro_horario:
-            alunos_filtrados = [a for a in alunos_filtrados if a.get('Horário') == filtro_horario]
-        if filtro_prof:
-            alunos_filtrados = [a for a in alunos_filtrados if a.get('Professor') == filtro_prof]
-        if filtro_nivel:
-            alunos_filtrados = [a for a in alunos_filtrados if a.get('Nível') == filtro_nivel]
-        if filtro_categoria:
-            alunos_filtrados = [a for a in alunos_filtrados if a.get('Categoria', '').lower() == filtro_categoria.lower()]
-
+        query = self.alunos_search_entry.get().lower()
+        alunos_filtrados = [aluno for aluno in self.all_students_data if query in aluno.get('Nome', '').lower()] if query else self.all_students_data
         self._construir_grid_alunos(alunos_filtrados)
-
-    def limpar_filtros_alunos(self):
-        """Reseta todos os filtros da aba Alunos para o estado padrão."""
-        self.alunos_turma_combo.set("")
-        self.alunos_horario_combo.set("")
-        self.alunos_prof_var.set("") # Desseleciona os radio buttons de professor
-        self.alunos_nivel_combo.set("")
-        self.alunos_categoria_entry.delete(0, 'end') # Limpa o campo de texto
-        # Após limpar, aplica os filtros para atualizar a lista (mostrando todos)
-        self.aplicar_filtros_alunos()
 
     def _construir_grid_alunos(self, alunos_para_exibir):
         """Constrói a grade de exibição na aba 'Alunos'."""
@@ -701,13 +630,11 @@ class App(ctk.CTk):
                 # Normaliza nomes e garante que chaves esperadas existam
                 sorted_cats = sorted(categorias, key=lambda x: x.get('Idade Mínima', 0), reverse=True)
                 self.categorias_data = sorted_cats
-                # MODIFICADO: Atualiza a lista de sugestões do SearchableEntry
-                self.alunos_categoria_entry.suggestions_list = [cat.get('Nome da Categoria') or cat.get('Categoria') for cat in sorted_cats if cat.get('Nome da Categoria') or cat.get('Categoria')]
             self.after(0, _update_ui)
         except requests.exceptions.RequestException as e:
             print(f"Erro ao carregar categorias: {e}")
-            self.after(0, lambda: self.alunos_categoria_entry.configure(placeholder_text="Erro ao carregar categorias"))
 
+            
     def _update_ui_error(self, error_message):
         """Limpa um frame e exibe uma mensagem de erro nele."""
         for widget in self.alunos_scroll_frame.winfo_children():
