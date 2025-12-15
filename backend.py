@@ -112,6 +112,19 @@ class ChamadaPayload(BaseModel):
     """Define a estrutura dos dados de chamada que o frontend enviará."""
     registros: Dict[str, Dict[str, str]]  # Ex: {"Nome Aluno": {"dd/mm/yyyy": "c"}}
 
+class AlunoPayload(BaseModel):
+    """Define a estrutura dos dados de um novo aluno que o frontend enviará."""
+    Nome: str
+    Aniversario: str
+    Gênero: str = ""
+    Telefone: str = ""
+    Turma: str
+    Horário: str
+    Professor: str
+    ParQ: str = ""
+    Nível: str = ""
+    Categoria: str = ""
+
 # --- ENDPOINTS DA API ---
 
 @app.get("/")
@@ -357,6 +370,52 @@ def salvar_chamada(payload: dict):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao salvar a chamada: {e}")
+
+# --- NOVO ENDPOINT PARA ADICIONAR ALUNO ---
+@app.post("/api/aluno")
+def adicionar_aluno(aluno_data: AlunoPayload):
+    """Adiciona um novo aluno à planilha 'Alunos'."""
+    try:
+        # Carrega os dados atuais para garantir que não estamos sobrescrevendo nada
+        df_alunos, df_turmas, df_registros, df_categorias = get_dados_cached()
+
+        # Verifica se o aluno já existe (pelo nome)
+        if aluno_data.Nome in df_alunos['Nome'].values:
+            raise HTTPException(
+                status_code=409, # 409 Conflict
+                detail=f"Já existe um aluno com o nome '{aluno_data.Nome}'. Por favor, use um nome diferente."
+            )
+
+        # Converte o Pydantic model para um dicionário e depois para um DataFrame
+        # Renomeia 'Aniversario' para 'Data de Nascimento' para corresponder à coluna do Excel
+        novo_aluno_dict = aluno_data.dict()
+        novo_aluno_dict['Data de Nascimento'] = novo_aluno_dict.pop('Aniversario')
+        
+        # Garante que o nome da coluna de telefone corresponda ao que está no Excel
+        if 'Telefone' in novo_aluno_dict:
+             novo_aluno_dict['Whatsapp'] = novo_aluno_dict.pop('Telefone')
+
+        novo_aluno_df = pd.DataFrame([novo_aluno_dict])
+
+        # Adiciona a nova linha ao DataFrame de alunos
+        df_alunos_atualizado = pd.concat([df_alunos, novo_aluno_df], ignore_index=True)
+
+        # Reescreve o arquivo Excel com a lista de alunos atualizada
+        with pd.ExcelWriter(NOME_ARQUIVO, engine='openpyxl') as writer:
+            df_alunos_atualizado.to_excel(writer, sheet_name='Alunos', index=False)
+            df_turmas.to_excel(writer, sheet_name='Turmas', index=False)
+            df_categorias.to_excel(writer, sheet_name='Categorias', index=False)
+            df_registros.to_excel(writer, sheet_name='Registros', index=False)
+
+        # Força a limpeza do cache para que a próxima leitura inclua o novo aluno
+        _cache["timestamp"] = 0
+
+        return {"status": "Aluno adicionado com sucesso!", "aluno": aluno_data.dict()}
+
+    except HTTPException:
+        raise # Re-levanta exceções HTTP (como o 409) para que o FastAPI as manipule
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro interno ao adicionar aluno: {e}")
 
 # Para rodar este servidor, use o comando no terminal:
 # uvicorn backend:app --reload

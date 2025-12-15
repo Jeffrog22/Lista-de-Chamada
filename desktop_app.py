@@ -816,6 +816,28 @@ class App(ctk.CTk):
         y = main_y + (main_h - top_h) // 2
         toplevel.geometry(f"{top_w}x{top_h}+{x}+{y}")
 
+    def _calcular_idade_no_ano(self, data_nasc_str):
+        """Calcula a idade que o aluno fará no ano corrente."""
+        if not data_nasc_str:
+            return None
+
+        # Se já for um objeto datetime
+        if isinstance(data_nasc_str, datetime):
+            ano_corrente = datetime.now().year
+            return ano_corrente - data_nasc_str.year
+
+        data_text = str(data_nasc_str)
+        # Tenta formatos possíveis: dd/mm/YYYY, ISO (YYYY-mm-ddT...), ou apenas YYYY-mm-dd
+        for fmt in ('%d/%m/%Y', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d'):
+            try:
+                parsed = datetime.strptime(data_text.split('T')[0] if 'T' in data_text else data_text, fmt.split('T')[0])
+                ano_corrente = datetime.now().year
+                return ano_corrente - parsed.year
+            except (ValueError, TypeError):
+                continue
+
+        return None
+
 
 # --- NOVA CLASSE PARA O FORMULÁRIO DE ADIÇÃO DE ALUNO ---
 class AddStudentToplevel(ctk.CTkToplevel):
@@ -940,13 +962,21 @@ class AddStudentToplevel(ctk.CTkToplevel):
         self.widgets['nivel_label'] = ctk.CTkLabel(auto_frame, text="-", font=ctk.CTkFont(weight="bold"))
         self.widgets['nivel_label'].grid(row=1, column=2, sticky="w", pady=(0,5))
 
-        # --- Botão de Adicionar ---
-        add_button = ctk.CTkButton(self, text="Adicionar Aluno", command=self._submit, height=40)
-        add_button.pack(pady=(0, 20), padx=20)
-
+        # --- Frame para os botões de ação ---
+        button_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
+        button_frame.grid(row=9, column=0, columnspan=2, pady=(10, 20), padx=20, sticky="ew")
+        button_frame.grid_columnconfigure((0, 1), weight=1)
+        
+        # --- Botão Cancelar ---
+        cancel_button = ctk.CTkButton(button_frame, text="Cancelar", command=self._clear_form,
+                                      fg_color="transparent", border_width=1,
+                                      height=40)
+        cancel_button.grid(row=0, column=0, padx=(0, 5), sticky="ew")
+        # --- Botão Adicionar ---
+        add_button = ctk.CTkButton(button_frame, text="Adicionar Aluno", command=self._submit, height=40)
+        add_button.grid(row=0, column=1, padx=(5, 0), sticky="ew")
         # Navegação com Enter
         self._set_enter_navigation()
-
         on_field_change() # Inicializa os campos derivados
 
     def _set_enter_navigation(self):
@@ -959,6 +989,28 @@ class AddStudentToplevel(ctk.CTkToplevel):
             next_widget = widgets_order[i + 1] if i + 1 < len(widgets_order) else None
             if next_widget:
                 widget.bind("<Return>", lambda e, w=next_widget: w.focus_set())
+
+    def _clear_form(self):
+        """Limpa todos os campos do formulário e retorna o foco para o campo 'nome'."""
+        # Limpa os campos de texto (Entry)
+        self.widgets['nome'].delete(0, "end")
+        self.widgets['data_nasc'].delete(0, "end")
+        self.widgets['telefone'].delete(0, "end")
+
+        # Limpa os ComboBoxes
+        self.widgets['genero'].set("")
+        self.widgets['turma'].set("")
+        self.widgets['horario'].set("")
+
+        # Reseta os RadioButtons para um estado padrão
+        self.widgets['prof_var'].set("")  # Desseleciona todos os professores
+        self.widgets['parq_var'].set("Sim") # Volta para o padrão "Sim"
+
+        # Atualiza os campos derivados (Idade, Categoria, Nível) que serão limpos
+        self._update_derived_fields(self.widgets)
+
+        # Coloca o cursor de volta no campo "Nome"
+        self.widgets['nome'].focus_set()
 
     def _submit(self):
         # Coleta os dados
@@ -982,9 +1034,8 @@ class AddStudentToplevel(ctk.CTkToplevel):
 
         # Envia para a API
         try:
-            # CORREÇÃO 2: O endpoint correto para criação parece ser /api/alunos/add,
-            # já que /api/alunos retorna 405 (não permite POST) e /api/aluno retorna 404 (não encontrado).
-            response = requests.post(f"{API_BASE_URL}/api/alunos/add", json=data)
+            # CORREÇÃO: O endpoint para criar um novo aluno é um POST para /api/aluno (singular).
+            response = requests.post(f"{API_BASE_URL}/api/aluno", json=data)
             response.raise_for_status()
             
             messagebox.showinfo("Sucesso", f"Aluno '{data['Nome']}' adicionado com sucesso!", parent=self)
@@ -1072,7 +1123,7 @@ class AddStudentToplevel(ctk.CTkToplevel):
     # MODIFICADO: Agora usa os dados de turmas e categorias da App
     def _update_derived_fields(self, widgets):
         # 1. Calcular Idade e Categoria
-        idade = self._calcular_idade_no_ano(widgets['data_nasc'].get())
+        idade = self.master_app._calcular_idade_no_ano(widgets['data_nasc'].get())
         categoria = self._definir_categoria(idade)
         if idade is not None:
             widgets['idade_label'].configure(text=str(idade))
@@ -1083,34 +1134,6 @@ class AddStudentToplevel(ctk.CTkToplevel):
         # 2. Encontrar Nível
         nivel = self._encontrar_nivel_da_turma(widgets)
         widgets['nivel_label'].configure(text=nivel)
-
-    def _calcular_idade_no_ano(self, data_nasc_str):
-        """Calcula a idade que o aluno fará no ano corrente."""
-        if not data_nasc_str:
-            return None
-
-        # Se já for um objeto datetime
-        if isinstance(data_nasc_str, datetime):
-            ano_corrente = datetime.now().year
-            return ano_corrente - data_nasc_str.year
-
-        data_text = str(data_nasc_str)
-        # Tenta formatos possíveis: dd/mm/YYYY, ISO (YYYY-mm-ddT...), ou apenas YYYY-mm-dd
-        for fmt in ('%d/%m/%Y', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d'):
-            try:
-                parsed = datetime.strptime(data_text.split('T')[0] if 'T' in data_text else data_text, fmt.split('T')[0])
-                ano_corrente = datetime.now().year
-                return ano_corrente - parsed.year
-            except (ValueError, TypeError):
-                continue
-
-        # Tenta parse flexível (sem dependências adicionais)
-        try:
-            parsed_iso = datetime.fromisoformat(data_text)
-            ano_corrente = datetime.now().year
-            return ano_corrente - parsed_iso.year
-        except Exception:
-            return None
 
     def _definir_categoria(self, idade):
         """Define a categoria do aluno com base na idade e nos dados de categoria em cache."""
@@ -1135,15 +1158,13 @@ class AddStudentToplevel(ctk.CTkToplevel):
         turma = widgets['turma'].get()
         horario = widgets['horario'].get()
         prof = widgets['prof_var'].get()
-        # MODIFICAÇÃO: Busca os dados de turmas diretamente da instância principal da App.
-        # Isso garante que os dados mais recentes sejam usados, evitando race conditions.
         turmas_data = self.master_app.turmas_data
 
         if all([turma, horario, prof, turmas_data]):
             for t_info in turmas_data:
                 if (t_info.get("Turma") == turma and t_info.get("Horário") == horario and t_info.get("Professor") == prof):
-                    return t_info.get("Nível", "-") # Retorna o nível e encerra a busca
-        return "-" # Retorna o padrão se nada for encontrado
+                    return t_info.get("Nível", "-")
+        return "-"
 
 if __name__ == "__main__":
     # --- Instalação de Dependências ---
