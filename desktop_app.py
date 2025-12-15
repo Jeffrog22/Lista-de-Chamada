@@ -848,7 +848,7 @@ class AddStudentToplevel(ctk.CTkToplevel):
         self.on_success = on_success_callback
 
         self.title("Adicionar Novo Aluno")
-        self.geometry("600x650")
+        self.geometry("600x550") # Reduz a altura total da janela
         self.transient(master)
         self.grab_set()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -964,11 +964,11 @@ class AddStudentToplevel(ctk.CTkToplevel):
 
         # --- Frame para os botões de ação ---
         button_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
-        button_frame.grid(row=9, column=0, columnspan=2, pady=(10, 20), padx=20, sticky="ew")
+        button_frame.grid(row=9, column=0, columnspan=2, pady=(10, 4), padx=20, sticky="ew") # Reduz o espaçamento inferior
         button_frame.grid_columnconfigure((0, 1), weight=1)
         
         # --- Botão Cancelar ---
-        cancel_button = ctk.CTkButton(button_frame, text="Cancelar", command=self._clear_form,
+        cancel_button = ctk.CTkButton(button_frame, text="Cancelar", command=self._clear_personal_info_fields,
                                       fg_color="transparent", border_width=1,
                                       height=40)
         cancel_button.grid(row=0, column=0, padx=(0, 5), sticky="ew")
@@ -990,8 +990,8 @@ class AddStudentToplevel(ctk.CTkToplevel):
             if next_widget:
                 widget.bind("<Return>", lambda e, w=next_widget: w.focus_set())
 
-    def _clear_form(self):
-        """Limpa todos os campos do formulário e retorna o foco para o campo 'nome'."""
+    def _clear_personal_info_fields(self):
+        """Limpa apenas os campos de informação pessoal do aluno e foca no nome."""
         # Limpa os campos de texto (Entry)
         self.widgets['nome'].delete(0, "end")
         self.widgets['data_nasc'].delete(0, "end")
@@ -999,16 +999,7 @@ class AddStudentToplevel(ctk.CTkToplevel):
 
         # Limpa os ComboBoxes
         self.widgets['genero'].set("")
-        self.widgets['turma'].set("")
-        self.widgets['horario'].set("")
-
-        # Reseta os RadioButtons para um estado padrão
-        self.widgets['prof_var'].set("")  # Desseleciona todos os professores
-        self.widgets['parq_var'].set("Sim") # Volta para o padrão "Sim"
-
-        # Atualiza os campos derivados (Idade, Categoria, Nível) que serão limpos
-        self._update_derived_fields(self.widgets)
-
+        
         # Coloca o cursor de volta no campo "Nome"
         self.widgets['nome'].focus_set()
 
@@ -1044,8 +1035,9 @@ class AddStudentToplevel(ctk.CTkToplevel):
             if self.on_success:
                 self.on_success(data)
             
-            self._on_close() # Fecha a janela após o sucesso
-
+            # Limpa os campos pessoais para a próxima adição, mantendo os da turma
+            self._clear_personal_info_fields()
+            
         except requests.exceptions.RequestException as e:
             error_msg = f"Não foi possível adicionar o aluno.\n\nErro: {e}"
             try:
