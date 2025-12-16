@@ -511,28 +511,24 @@ class App(ctk.CTk):
                 categorias_list = []
 
             def definir_categoria_por_idade_local(idade_val):
-                if idade_val is None:
+                if idade_val is None or not categorias_list:
                     return 'Não Categorizado'
                 # Escolhe a maior 'Idade Mínima' que seja <= idade_val
                 sorted_rules = sorted(categorias_list, key=lambda r: r.get('Idade Mínima', 0), reverse=True)
                 for regra in sorted_rules:
                     idade_min = regra.get('Idade Mínima', 0)
                     if idade_val >= idade_min:
-                        return regra.get('Categoria') or regra.get('Nome da Categoria') or 'Não Categorizado'
+                        # Prioriza 'Nome da Categoria' se existir
+                        return regra.get('Nome da Categoria') or regra.get('Categoria') or 'Não Categorizado'
                 return 'Não Categorizado'
 
             # Processa cada aluno para adicionar idade e categoria
-            for aluno in alunos:
-                # Aceita múltiplas variações do nome da coluna de data de nascimento
-                data_nasc = aluno.get('Data de Nascimento') or aluno.get('Aniversário') or aluno.get('Aniversario')
-                aluno_idade = self._calcular_idade_no_ano(data_nasc)
-                aluno['Idade'] = aluno_idade if aluno_idade is not None else ''
-                aluno['Categoria'] = definir_categoria_por_idade_local(aluno_idade)
+            for idx, aluno in enumerate(alunos):
+                # Normaliza os dados do aluno para consistência interna
+                aluno_normalizado = self._normalizar_dados_aluno(aluno, categorias_list)
+                alunos[idx] = aluno_normalizado
 
-            self.all_students_data = alunos # Armazena a lista processada no cache
-            
-            # Extrai os níveis únicos da lista de alunos carregada
-            niveis_unicos = sorted(list(set(a.get('Nível') for a in alunos if a.get('Nível'))))
+            self.all_students_data = alunos # Armazena a lista processada e normalizada no cache
 
             
             # Após carregar, constrói o grid com TODOS os alunos
@@ -543,6 +539,41 @@ class App(ctk.CTk):
         except requests.exceptions.RequestException as e:
             # Passa a exceção 'e' para a função de atualização da UI
             self.after(0, self._update_ui_error, e)
+
+    def _normalizar_dados_aluno(self, aluno_data, categorias_list):
+        """
+        Centraliza a lógica de limpeza e padronização dos dados de um aluno.
+        Garante que chaves conflitantes (ex: 'Aniversario' vs 'Data de Nascimento') sejam unificadas.
+        """
+        # 1. Unifica a data de nascimento
+        data_nasc_val = aluno_data.get('Aniversario') or aluno_data.get('Aniversário') or aluno_data.get('Data de Nascimento')
+        aluno_data['Aniversario'] = data_nasc_val
+
+        # 2. Unifica o telefone/whatsapp
+        telefone_val = aluno_data.get('Whatsapp') or aluno_data.get('Telefone')
+        aluno_data['Whatsapp'] = telefone_val
+
+        # 3. Calcula e adiciona Idade
+        idade = self._calcular_idade_no_ano(data_nasc_val)
+        aluno_data['Idade'] = idade if idade is not None else ''
+
+        # 4. Define e adiciona Categoria
+        def definir_categoria(idade_val):
+            if idade_val is None or not categorias_list:
+                return 'Não Categorizado'
+            sorted_rules = sorted(categorias_list, key=lambda r: r.get('Idade Mínima', 0), reverse=True)
+            for regra in sorted_rules:
+                idade_min = regra.get('Idade Mínima', 0)
+                if idade_val >= idade_min:
+                    return regra.get('Nome da Categoria') or regra.get('Categoria') or 'Não Categorizado'
+            return 'Não Categorizado'
+
+        aluno_data['Categoria'] = definir_categoria(idade)
+
+        # Remove chaves antigas/conflitantes para evitar ambiguidade
+        aluno_data.pop('Data de Nascimento', None)
+        aluno_data.pop('Telefone', None)
+        return aluno_data
             
     def filtrar_alunos_por_nome(self, event=None):
         """Filtra a lista de alunos na aba 'Alunos' com base no texto da caixa de busca."""
@@ -942,7 +973,7 @@ class App(ctk.CTk):
 
     def _calcular_idade_no_ano(self, data_nasc_str):
         """Calcula a idade que o aluno fará no ano corrente."""
-        if not data_nasc_str:
+        if not data_nasc_str or str(data_nasc_str) == 'NaT':
             return None
 
         # Se já for um objeto datetime
@@ -964,7 +995,7 @@ class App(ctk.CTk):
 
     def _formatar_data_para_exibicao(self, data_str):
         """Formata uma string de data (vários formatos) para dd/mm/YYYY."""
-        if not data_str:
+        if not data_str or str(data_str) == 'NaT':
             return ""
 
         # Se já for um objeto datetime
@@ -1156,11 +1187,11 @@ class AddStudentToplevel(ctk.CTkToplevel):
         self.widgets['genero'].set(self.edit_data.get('Gênero', ''))
 
         # Formata a data de nascimento para dd/mm/YYYY
-        data_nasc_str = self.edit_data.get('Aniversario') or self.edit_data.get('Data de Nascimento')
+        data_nasc_str = self.edit_data.get('Aniversario') # Já foi normalizado
         if data_nasc_str:
             self.widgets['data_nasc'].insert(0, self.master_app._formatar_data_para_exibicao(str(data_nasc_str)))
 
-        self.widgets['telefone'].insert(0, self.edit_data.get('Telefone', '') or self.edit_data.get('Whatsapp', ''))
+        self.widgets['telefone'].insert(0, self.edit_data.get('Whatsapp', '')) # Já foi normalizado
         self.widgets['turma'].set(self.edit_data.get('Turma', ''))
         self.widgets['horario'].set(self.edit_data.get('Horário', ''))
         self.widgets['prof_var'].set(self.edit_data.get('Professor', ''))
@@ -1196,7 +1227,7 @@ class AddStudentToplevel(ctk.CTkToplevel):
             "Nome": self.widgets['nome'].get(),
             "Aniversario": self.widgets['data_nasc'].get(),
             "Gênero": self.widgets['genero'].get(),
-            "Telefone": self.widgets['telefone'].get(),
+            "Whatsapp": self.widgets['telefone'].get(), # Envia como 'Whatsapp' para consistência
             "Turma": self.widgets['turma'].get(),
             "Horário": self.widgets['horario'].get(),
             "Professor": self.widgets['prof_var'].get(),
@@ -1390,8 +1421,8 @@ class ViewStudentToplevel(ctk.CTkToplevel):
 
         row = 0
         for key, label_text in fields.items():
-            # Tenta obter o valor com várias chaves possíveis
-            value = self.student_data.get(key) or self.student_data.get(key.replace(" ", "_")) or self.student_data.get(key.lower())
+            # Obtém o valor da chave padronizada. A normalização já foi feita.
+            value = self.student_data.get(key)
             if key == "Aniversario":
                 value = self.master_app._formatar_data_para_exibicao(value)
 
