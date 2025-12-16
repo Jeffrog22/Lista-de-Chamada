@@ -214,6 +214,11 @@ class App(ctk.CTk):
         self.alunos_search_entry = ctk.CTkEntry(self.tab_view.tab("Alunos"), placeholder_text="Buscar por nome...")
         self.alunos_search_entry.grid(row=0, column=0, padx=10, pady=10, sticky="w")
         self.alunos_search_entry.bind("<KeyRelease>", self.filtrar_alunos_por_nome)
+        
+        # Botão para limpar a ordenação
+        self.clear_sort_button = ctk.CTkButton(self.tab_view.tab("Alunos"), text="Limpar Ordenação", width=120,
+                                               command=self.limpar_ordenacao_alunos)
+        self.clear_sort_button.grid(row=0, column=0, padx=10, pady=10, sticky="e")        
 
         # Scroll frame para a lista de alunos
         self.alunos_scroll_frame = ctk.CTkScrollableFrame(self.tab_view.tab("Alunos"), label_text="Cadastro Geral de Alunos")
@@ -228,7 +233,8 @@ class App(ctk.CTk):
         # --- ARMAZENAMENTO DE ESTADO ---
         self.sidebar_is_open = True
         meses = [datetime(2000, i, 1).strftime('%B') for i in range(1, 13)]
-        self.mes_atual_str = meses[datetime.now().month - 1]
+        self.alunos_sort_state = {'key': None, 'reverse': False} # Para ordenação da lista de alunos
+        self.alunos_filter_state = {} # Para filtros por coluna
         self.chamada_data = {} # Guarda os dados da API
         self.chamada_widgets = {} # Guarda os widgets de botão para poder ler o estado
         self.all_students_data = None # Cache para todos os alunos
@@ -542,8 +548,34 @@ class App(ctk.CTk):
             return # Não faz nada se os dados ainda não foram carregados
 
         query = self.alunos_search_entry.get().lower()
-        alunos_filtrados = [aluno for aluno in self.all_students_data if query in aluno.get('Nome', '').lower()] if query else self.all_students_data
+        
+        # Aplica filtro de busca por nome
+        alunos_filtrados_nome = [aluno for aluno in self.all_students_data if query in aluno.get('Nome', '').lower()] if query else self.all_students_data
+
+        # Aplica filtros de coluna (do menu)
+        alunos_filtrados = self._apply_column_filters(alunos_filtrados_nome)
+
+        # Reconstrói o grid com os dados duplamente filtrados
         self._construir_grid_alunos(alunos_filtrados)
+
+    def limpar_ordenacao_alunos(self):
+        """Reseta o estado de ordenação e reconstrói a grade."""
+        self.alunos_sort_state = {'key': None, 'reverse': False}
+        # Usa a função de filtro para re-exibir a lista (respeitando a busca, se houver)
+        self.filtrar_alunos_por_nome()
+
+    def _apply_column_filters(self, data_list):
+        """Aplica os filtros de coluna definidos em self.alunos_filter_state."""
+        if not self.alunos_filter_state:
+            return data_list
+
+        filtered_data = data_list
+        for key, selected_values in self.alunos_filter_state.items():
+            if not selected_values: continue # Se o conjunto de valores estiver vazio, ignora o filtro
+            
+            filtered_data = [item for item in filtered_data if item.get(key) in selected_values]
+
+        return filtered_data
 
     def _construir_grid_alunos(self, alunos_para_exibir):
         """Constrói a grade de exibição na aba 'Alunos'."""
@@ -551,8 +583,33 @@ class App(ctk.CTk):
             widget.destroy()
 
         if not alunos_para_exibir:
-            ctk.CTkLabel(self.alunos_scroll_frame, text="Nenhum aluno encontrado para os filtros selecionados.").pack(pady=20)
+            ctk.CTkLabel(self.alunos_scroll_frame, text="Nenhum aluno encontrado.").pack(pady=20)
             return
+
+        # --- Lógica de Ordenação ---
+        sort_key = self.alunos_sort_state.get('key')
+        sort_reverse = self.alunos_sort_state.get('reverse', False)
+
+        if sort_key:
+            # Mapeamento de valor para ordenação customizada de 'Nível'
+            nivel_order = {
+                'Iniciação B': 0, 'Iniciação A': 1, 'Nível 1': 2, 'Nível 2': 3,
+                'Nível 3': 4, 'Nível 4': 5, 'Adulto B': 6, 'Adulto A': 7
+            }
+
+            def get_sort_value(aluno):
+                val = aluno.get(sort_key, '')
+                if val is None: val = ''
+
+                if sort_key == 'Nível':
+                    return nivel_order.get(val, 99)
+                if sort_key == 'Idade':
+                    return int(val) if str(val).isdigit() else 0
+                if sort_key == 'Horário':
+                    return val.split('-')[0]
+                return str(val).lower()
+
+            alunos_para_exibir = sorted(alunos_para_exibir, key=get_sort_value, reverse=sort_reverse)
 
         frame = self.alunos_scroll_frame
 
@@ -564,16 +621,39 @@ class App(ctk.CTk):
         for col in range(2, len(headers)):
             frame.grid_columnconfigure(col, weight=0)
 
+        def create_header_button(text, key):
+            """Cria um botão de cabeçalho que aciona a ordenação."""
+            # Define a cor de fundo padrão e a cor de destaque para o cabeçalho ativo
+            fg_color = "transparent"
+            hover_color = ("gray75", "gray25") # Cor padrão ao passar o mouse
+            display_text = text
+
+            if self.alunos_sort_state.get('key') == key:
+                sort_arrow = '▼' if self.alunos_sort_state.get('reverse') else '▲'
+                display_text = f"{text} {sort_arrow}"
+                # Altera a cor de fundo se esta for a coluna de ordenação
+                fg_color = ("#e0e2e4", "#4a4d50") # Uma cor de destaque sutil
+                hover_color = ("#d3d5d7", "#5a5d60") # Um tom um pouco mais escuro para o hover
+            
+            # Adiciona um ícone de filtro se um filtro estiver ativo para esta coluna
+            if key in self.alunos_filter_state and self.alunos_filter_state[key]:
+                display_text += " ▾" # Um ícone simples para indicar filtro
+
+            return ctk.CTkButton(frame, text=display_text,
+                                 fg_color=fg_color, hover_color=hover_color,
+                                 text_color=("gray10", "gray90"),
+                                 font=ctk.CTkFont(size=12, weight="bold"),
+                                 # O comando agora abre o menu de filtro
+                                 command=lambda k=key, b=None: self._open_filter_menu(k, b))
+
         header_labels = []
         for i, header_text in enumerate(headers):
-            # Fonte dos cabeçalhos reduzida em ~2pt para melhor densidade
-            # Alinha o cabeçalho 'Nome' à esquerda
-            anchor = 'w' if header_text == 'Nome' else 'center'
-            pad = (10, 5) if header_text == 'Nome' else (5, 5)
-            header_label = ctk.CTkLabel(frame, text=header_text, font=ctk.CTkFont(size=12, weight="bold"), anchor=anchor)
-            sticky_val = 'w' if anchor == 'w' else 'ew'
-            header_label.grid(row=0, column=i, padx=pad, pady=4, sticky=sticky_val)
-            header_labels.append(header_label)
+            key = header_text # Assume que o texto do cabeçalho é a chave nos dados
+            header_button = create_header_button(header_text, key)
+            header_button.grid(row=0, column=i, padx=5, pady=4, sticky='w' if header_text == 'Nome' else 'ew')
+            header_labels.append(header_button)
+            # Atualiza a referência do botão no comando lambda
+            header_button.configure(command=lambda k=key, b=header_button: self._open_filter_menu(k, b))
 
         # Linhas de Alunos
         for row_idx, aluno in enumerate(alunos_para_exibir, start=1):
@@ -618,6 +698,40 @@ class App(ctk.CTk):
                 frame.grid_columnconfigure(i, minsize=min_px)
         except Exception:
             pass
+
+    def _sort_alunos_by(self, key):
+        """Define a chave de ordenação e reconstrói a grade de alunos."""
+        if self.alunos_sort_state.get('key') == key:
+            # Se já está ordenando por esta chave, inverte a direção
+            self.alunos_sort_state['reverse'] = not self.alunos_sort_state.get('reverse', False)
+        else:
+            # Nova chave de ordenação, começa com ascendente
+            self.alunos_sort_state = {'key': key, 'reverse': False}
+        
+        self.filtrar_alunos_por_nome() # Reconstrói a grade com a nova ordenação
+
+    def _open_filter_menu(self, key, button_widget):
+        """Abre o menu de filtro para uma coluna específica."""
+        if not self.all_students_data: return
+
+        # Coleta valores únicos da coluna
+        unique_values = sorted(list(set(str(aluno.get(key, '')) for aluno in self.all_students_data if aluno.get(key))))
+
+        # Cria e exibe o menu
+        FilterMenu(self, key, unique_values, button_widget, self._apply_filter_and_sort)
+
+    def _apply_filter_and_sort(self, key, selected_values, sort_direction=None):
+        """Callback para aplicar filtros e ordenação a partir do FilterMenu."""
+        # Atualiza o estado do filtro
+        if selected_values is not None:
+            self.alunos_filter_state[key] = selected_values
+
+        # Atualiza o estado da ordenação, se aplicável
+        if sort_direction is not None:
+            self.alunos_sort_state = {'key': key, 'reverse': sort_direction == 'desc'}
+
+        # Reconstrói o grid
+        self.filtrar_alunos_por_nome()
 
     def carregar_categorias(self):
         """Busca as categorias da API e as armazena em cache."""
@@ -1084,6 +1198,105 @@ class AddStudentToplevel(ctk.CTkToplevel):
                 if (t_info.get("Turma") == turma and t_info.get("Horário") == horario and t_info.get("Professor") == prof):
                     return t_info.get("Nível", "-")
         return "-"
+
+# --- CLASSE PARA O MENU DE FILTRO ESTILO EXCEL ---
+class FilterMenu(ctk.CTkToplevel):
+    def __init__(self, master, key, values, button_widget, callback):
+        super().__init__(master)
+        self.key = key
+        self.callback = callback
+        self.master_app = master
+
+        self.withdraw() # Esconde a janela inicialmente
+        self.overrideredirect(True) # Remove a barra de título
+        self.attributes("-topmost", True)
+
+        # --- Variáveis de estado ---
+        self.check_vars = {value: tk.BooleanVar(value=value in self.master_app.alunos_filter_state.get(self.key, set(values))) for value in values}
+
+        # --- Frame principal ---
+        main_frame = ctk.CTkFrame(self, corner_radius=8, border_width=1)
+        main_frame.pack(expand=True, fill="both")
+
+        # Define um padding horizontal menor para todos os frames internos
+        inner_padx = 3
+
+        # --- Botões de Ordenação ---
+        sort_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        sort_frame.pack(fill="x", padx=inner_padx, pady=(5, 2))
+        # Botões ainda menores
+        ctk.CTkButton(sort_frame, text="Ordenar A-Z", height=24, font=ctk.CTkFont(size=11), command=lambda: self._apply_and_close(sort_direction='asc')).pack(fill="x")
+        ctk.CTkButton(sort_frame, text="Ordenar Z-A", height=24, font=ctk.CTkFont(size=11), command=lambda: self._apply_and_close(sort_direction='desc')).pack(fill="x", pady=(2,0))
+
+        # --- Linha divisória ---
+        ctk.CTkFrame(main_frame, height=1, fg_color="gray50").pack(fill="x", padx=inner_padx, pady=3)
+
+        # --- Filtros ---
+        filter_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        filter_frame.pack(fill="x", padx=inner_padx)
+        ctk.CTkButton(filter_frame, text="Limpar Filtro", height=24, font=ctk.CTkFont(size=11), command=self._clear_filters).pack(fill="x")
+
+        # --- Scrollable Frame para os checkboxes ---
+        # Reduz drasticamente a altura e o texto do label
+        scroll_frame = ctk.CTkScrollableFrame(main_frame, label_text="Valores", label_font=ctk.CTkFont(size=11), height=100)
+        scroll_frame.pack(expand=True, fill="both", padx=inner_padx, pady=3)
+
+        # Checkbox "(Selecionar Tudo)"
+        select_all_var = tk.BooleanVar(value=all(self.check_vars[v].get() for v in values))
+        ctk.CTkCheckBox(scroll_frame, text="(Selecionar Tudo)", variable=select_all_var, 
+                        font=ctk.CTkFont(size=11),
+                        command=lambda: self._toggle_all(select_all_var.get())).pack(anchor="w", padx=1)
+
+        for value in values:
+            ctk.CTkCheckBox(scroll_frame, text=value, variable=self.check_vars[value],
+                            font=ctk.CTkFont(size=11)
+                            ).pack(anchor="w", padx=1)
+
+        # --- Botões de Ação ---
+        action_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        action_frame.pack(fill="x", padx=inner_padx, pady=(5, 5))
+        action_frame.grid_columnconfigure((0,1), weight=1)
+        ctk.CTkButton(action_frame, text="OK", height=28, font=ctk.CTkFont(size=12), command=self._apply_and_close).grid(row=0, column=0, sticky="ew", padx=(0,1))
+        ctk.CTkButton(action_frame, text="Cancelar", height=28, font=ctk.CTkFont(size=12), fg_color="transparent", 
+                      border_width=1, command=self.destroy).grid(row=0, column=1, sticky="ew", padx=(1,0))
+
+        # --- Posicionamento e Foco ---
+        self.update_idletasks()
+        x = button_widget.winfo_rootx()
+        y = button_widget.winfo_rooty() + button_widget.winfo_height()
+        # Ajusta a largura da janela para ser igual à do botão de cabeçalho
+        menu_width = button_widget.winfo_width()
+        current_height = self.winfo_height()
+        self.geometry(f"{menu_width}x{current_height}+{x}+{y}")
+        self.deiconify() # Mostra a janela
+
+        self.bind("<FocusOut>", self._on_focus_out)
+        self.after(100, self.grab_set)
+
+    def _toggle_all(self, select_state):
+        """Seleciona ou deseleciona todos os checkboxes."""
+        for var in self.check_vars.values():
+            var.set(select_state)
+
+    def _clear_filters(self):
+        """Limpa o filtro para esta chave e fecha."""
+        self.callback(self.key, set(), sort_direction=None)
+        self.destroy()
+
+    def _apply_and_close(self, sort_direction=None):
+        """Aplica os filtros selecionados e/ou ordenação e fecha a janela."""
+        selected_values = {value for value, var in self.check_vars.items() if var.get()}
+        self.callback(self.key, selected_values, sort_direction)
+        self.destroy()
+
+    def _on_focus_out(self, event):
+        """Fecha a janela se o foco for perdido."""
+        # Pequeno delay para evitar fechar ao clicar em um widget filho
+        self.after(100, self._check_focus)
+
+    def _check_focus(self):
+        if self.focus_get() is None:
+            self.destroy()
 
 if __name__ == "__main__":
     # --- Instalação de Dependências ---
