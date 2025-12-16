@@ -240,6 +240,7 @@ class App(ctk.CTk):
         self.all_students_data = None # Cache para todos os alunos
         self.categorias_data = None # Cache para as categorias
         self.turmas_data = None # Cache para os dados das turmas (usado para encontrar o nível)
+        self.active_filter_menu = None # Referência ao menu de filtro ativo
         self.add_student_toplevel = None # Referência para a janela de adicionar aluno
         self.last_student_add_data = {} # Guarda os últimos dados para preenchimento
         
@@ -590,11 +591,17 @@ class App(ctk.CTk):
         sort_key = self.alunos_sort_state.get('key')
         sort_reverse = self.alunos_sort_state.get('reverse', False)
 
+        # --- Lógica de Ordenação ---
         if sort_key:
-            # Mapeamento de valor para ordenação customizada de 'Nível'
+            # Mapeamentos para ordenação customizada
             nivel_order = {
                 'Iniciação B': 0, 'Iniciação A': 1, 'Nível 1': 2, 'Nível 2': 3,
                 'Nível 3': 4, 'Nível 4': 5, 'Adulto B': 6, 'Adulto A': 7
+            }
+            categoria_order = {
+                'Pré-Mirim': 0, 'Mirim I': 1, 'Mirim II': 2, 'Petiz I': 3, 'Petiz II': 4,
+                'Infantil I': 5, 'Infantil II': 6, 'Juvenil I': 7, 'Juvenil II': 8,
+                'Júnior I': 9, 'Júnior II/Sênior': 10
             }
 
             def get_sort_value(aluno):
@@ -602,7 +609,14 @@ class App(ctk.CTk):
                 if val is None: val = ''
 
                 if sort_key == 'Nível':
-                    return nivel_order.get(val, 99)
+                    return nivel_order.get(val, 99) # Valores não mapeados vão para o final
+                if sort_key == 'Categoria':
+                    # Extrai a parte principal da categoria (ex: "Mirim" de "Mirim I")
+                    main_cat = val.split(' ')[0]
+                    # Usa a ordem do dicionário, com um valor alto para categorias não listadas (A...M)
+                    # e adiciona um sub-valor para ordenar dentro da mesma categoria (ex: Mirim I vs Mirim II)
+                    order_val = categoria_order.get(val, categoria_order.get(main_cat, 99))
+                    return (order_val, val)
                 if sort_key == 'Idade':
                     return int(val) if str(val).isdigit() else 0
                 if sort_key == 'Horário':
@@ -712,13 +726,29 @@ class App(ctk.CTk):
 
     def _open_filter_menu(self, key, button_widget):
         """Abre o menu de filtro para uma coluna específica."""
-        if not self.all_students_data: return
+        # Se um menu já estiver aberto, fecha-o.
+        if self.active_filter_menu and self.active_filter_menu.winfo_exists():
+            # Se o clique foi no mesmo botão, o menu será fechado e a função não continuará,
+            # criando o efeito de "toggle".
+            is_same_button = getattr(self.active_filter_menu, 'button_widget', None) == button_widget
+            self.active_filter_menu.destroy()
+            if is_same_button:
+                return
+
+        # Adia a criação para garantir que o menu antigo seja destruído primeiro.
+        # A verificação de segurança previne a criação se outro menu já estiver ativo.
+        self.after(10, lambda: self._create_filter_menu_safely(key, button_widget))
+
+    def _create_filter_menu_safely(self, key, button_widget):
+        if not self.all_students_data or self.active_filter_menu: return
 
         # Coleta valores únicos da coluna
         unique_values = sorted(list(set(str(aluno.get(key, '')) for aluno in self.all_students_data if aluno.get(key))))
 
         # Cria e exibe o menu
-        FilterMenu(self, key, unique_values, button_widget, self._apply_filter_and_sort)
+        self.active_filter_menu = FilterMenu(self, key, unique_values, button_widget, self._apply_filter_and_sort)
+        # O novo FilterMenu (Frame) se posiciona e se destrói sozinho.
+        # A referência é limpa no seu próprio método destroy.
 
     def _apply_filter_and_sort(self, key, selected_values, sort_direction=None):
         """Callback para aplicar filtros e ordenação a partir do FilterMenu."""
@@ -732,6 +762,12 @@ class App(ctk.CTk):
 
         # Reconstrói o grid
         self.filtrar_alunos_por_nome()
+
+    def _on_filter_menu_close(self, event):
+        """Limpa a referência ao menu de filtro quando ele é fechado."""
+        # Garante que o evento venha do widget que estamos rastreando
+        if event.widget == self.active_filter_menu:
+            self.active_filter_menu = None
 
     def carregar_categorias(self):
         """Busca as categorias da API e as armazena em cache."""
@@ -1200,78 +1236,116 @@ class AddStudentToplevel(ctk.CTkToplevel):
         return "-"
 
 # --- CLASSE PARA O MENU DE FILTRO ESTILO EXCEL ---
-class FilterMenu(ctk.CTkToplevel):
+class FilterMenu(ctk.CTkFrame):
+    # --- CONFIGURAÇÃO DE ALTURA ---
+    # Defina um número (ex: 400) para uma altura fixa ou None para ajuste automático à janela.
+    MANUAL_HEIGHT = 280
+
     def __init__(self, master, key, values, button_widget, callback):
-        super().__init__(master)
+        # O master agora é a janela principal da aplicação (App).
+        # A altura será definida depois que o conteúdo for criado.
+        super().__init__(master, corner_radius=8, border_width=1)
+
+        # Define a largura do menu para ser igual à da coluna clicada
+        self.configure(width=button_widget.winfo_width())
+        self.pack_propagate(False) # Impede que os widgets filhos redimensionem o menu
+
         self.key = key
         self.callback = callback
+        self.button_widget = button_widget # Armazena o botão que abriu o menu
         self.master_app = master
 
-        self.withdraw() # Esconde a janela inicialmente
-        self.overrideredirect(True) # Remove a barra de título
-        self.attributes("-topmost", True)
-
         # --- Variáveis de estado ---
-        self.check_vars = {value: tk.BooleanVar(value=value in self.master_app.alunos_filter_state.get(self.key, set(values))) for value in values}
-
-        # --- Frame principal ---
-        main_frame = ctk.CTkFrame(self, corner_radius=8, border_width=1)
-        main_frame.pack(expand=True, fill="both")
+        # Se não houver filtro ativo para a chave, todos os valores são selecionados por padrão.
+        active_filters = self.master_app.alunos_filter_state.get(self.key)
+        initial_state = {value: tk.BooleanVar(value=True) for value in values} if active_filters is None else \
+                        {value: tk.BooleanVar(value=value in active_filters) for value in values}
+        self.check_vars = initial_state
 
         # Define um padding horizontal menor para todos os frames internos
         inner_padx = 3
 
         # --- Botões de Ordenação ---
-        sort_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        sort_frame.pack(fill="x", padx=inner_padx, pady=(5, 2))
-        # Botões ainda menores
-        ctk.CTkButton(sort_frame, text="Ordenar A-Z", height=24, font=ctk.CTkFont(size=11), command=lambda: self._apply_and_close(sort_direction='asc')).pack(fill="x")
-        ctk.CTkButton(sort_frame, text="Ordenar Z-A", height=24, font=ctk.CTkFont(size=11), command=lambda: self._apply_and_close(sort_direction='desc')).pack(fill="x", pady=(2,0))
+        sort_frame = ctk.CTkFrame(self, fg_color="transparent")
+        sort_frame.pack(fill="x", padx=inner_padx, pady=(5, 2))        
+        
+        # Define os textos dos botões de ordenação com base na coluna
+        if self.key in ['Nome', 'Turma', 'Professor']:
+            asc_text, desc_text = "Ordenar A-Z", "Ordenar Z-A"
+        elif self.key in ['Idade', 'Horário']:
+            asc_text, desc_text = "Ordenar do Menor para o Maior", "Ordenar do Maior para o Menor"
+        elif self.key in ['Nível', 'Categoria']:
+            asc_text, desc_text = "Ordenar < para >", "Ordenar > para <"
+        else:
+            asc_text, desc_text = "Ordenar Crescente", "Ordenar Decrescente"
 
+        ctk.CTkButton(sort_frame, 
+                      text=asc_text, 
+                      height=24, 
+                      font=ctk.CTkFont(size=11), 
+                      anchor="w",
+                      command=lambda: self._apply_and_close(sort_direction='asc')).pack(fill="x")
+        ctk.CTkButton(sort_frame, 
+                      text=desc_text, 
+                      height=24, 
+                      font=ctk.CTkFont(size=11), 
+                      anchor="w",
+                      command=lambda: self._apply_and_close(sort_direction='desc')).pack(fill="x", pady=(2,0))
+        
         # --- Linha divisória ---
-        ctk.CTkFrame(main_frame, height=1, fg_color="gray50").pack(fill="x", padx=inner_padx, pady=3)
+        ctk.CTkFrame(self, height=1, fg_color="gray50").pack(fill="x", padx=inner_padx, pady=3)
 
         # --- Filtros ---
-        filter_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        filter_frame = ctk.CTkFrame(self, fg_color="transparent")
         filter_frame.pack(fill="x", padx=inner_padx)
         ctk.CTkButton(filter_frame, text="Limpar Filtro", height=24, font=ctk.CTkFont(size=11), command=self._clear_filters).pack(fill="x")
 
+        # --- Posicionamento e Cálculo de Altura (FEITO ANTES DE CRIAR O SCROLL FRAME) ---
+        self.update_idletasks()
+        x = button_widget.winfo_rootx() - master.winfo_rootx()
+        y = button_widget.winfo_rooty() - master.winfo_rooty() + button_widget.winfo_height()
+
+        if self.MANUAL_HEIGHT is not None:
+            menu_height = self.MANUAL_HEIGHT
+        else:
+            # Calcula a altura máxima permitida para o menu não sair da tela
+            menu_height = master.winfo_height() - y - 15 # 15px de margem inferior
+        
+        self.configure(height=menu_height)
+
         # --- Scrollable Frame para os checkboxes ---
-        # Reduz drasticamente a altura e o texto do label
-        scroll_frame = ctk.CTkScrollableFrame(main_frame, label_text="Valores", label_font=ctk.CTkFont(size=11), height=100)
+        # O frame se expandirá para preencher o espaço vertical disponível.
+        scroll_frame = ctk.CTkScrollableFrame(self, label_text="Valores", label_font=ctk.CTkFont(size=11))
         scroll_frame.pack(expand=True, fill="both", padx=inner_padx, pady=3)
 
+
         # Checkbox "(Selecionar Tudo)"
-        select_all_var = tk.BooleanVar(value=all(self.check_vars[v].get() for v in values))
-        ctk.CTkCheckBox(scroll_frame, text="(Selecionar Tudo)", variable=select_all_var, 
+        # Se o filtro para esta chave não existir, todos são selecionados por padrão.
+        is_filtered = self.key in self.master_app.alunos_filter_state
+        all_selected = not is_filtered or all(self.check_vars[v].get() for v in values)
+        select_all_var = tk.BooleanVar(value=all_selected)
+        ctk.CTkCheckBox(scroll_frame, text="(Tudo)", variable=select_all_var, 
                         font=ctk.CTkFont(size=11),
                         command=lambda: self._toggle_all(select_all_var.get())).pack(anchor="w", padx=1)
 
         for value in values:
-            ctk.CTkCheckBox(scroll_frame, text=value, variable=self.check_vars[value],
-                            font=ctk.CTkFont(size=11)
-                            ).pack(anchor="w", padx=1)
+            ctk.CTkCheckBox(scroll_frame, text=value, variable=self.check_vars[value], font=ctk.CTkFont(size=11)).pack(anchor="w", padx=1)
 
         # --- Botões de Ação ---
-        action_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        action_frame.pack(fill="x", padx=inner_padx, pady=(5, 5))
+        action_frame = ctk.CTkFrame(self, fg_color="transparent")
+        action_frame.pack(fill="x", padx=inner_padx, pady=(4, 4))
         action_frame.grid_columnconfigure((0,1), weight=1)
-        ctk.CTkButton(action_frame, text="OK", height=28, font=ctk.CTkFont(size=12), command=self._apply_and_close).grid(row=0, column=0, sticky="ew", padx=(0,1))
-        ctk.CTkButton(action_frame, text="Cancelar", height=28, font=ctk.CTkFont(size=12), fg_color="transparent", 
+        ctk.CTkButton(action_frame, text="OK", height=24, font=ctk.CTkFont(size=10), command=self._apply_and_close).grid(row=0, column=0, sticky="ew", padx=(0,1))
+        ctk.CTkButton(action_frame, text="Cancela", height=24, font=ctk.CTkFont(size=10), fg_color="transparent", 
                       border_width=1, command=self.destroy).grid(row=0, column=1, sticky="ew", padx=(1,0))
 
-        # --- Posicionamento e Foco ---
-        self.update_idletasks()
-        x = button_widget.winfo_rootx()
-        y = button_widget.winfo_rooty() + button_widget.winfo_height()
-        # Ajusta a largura da janela para ser igual à do botão de cabeçalho
-        menu_width = button_widget.winfo_width()
-        current_height = self.winfo_height()
-        self.geometry(f"{menu_width}x{current_height}+{x}+{y}")
-        self.deiconify() # Mostra a janela
 
-        self.bind("<FocusOut>", self._on_focus_out)
-        self.after(100, self.grab_set)
+        # Posiciona o menu
+        self.place(x=x, y=y)
+        self.lift()
+
+        # Fecha o menu se o usuário clicar fora dele
+        self.master_app.bind("<Button-1>", self._on_click_outside, add="+")
 
     def _toggle_all(self, select_state):
         """Seleciona ou deseleciona todos os checkboxes."""
@@ -1280,7 +1354,7 @@ class FilterMenu(ctk.CTkToplevel):
 
     def _clear_filters(self):
         """Limpa o filtro para esta chave e fecha."""
-        self.callback(self.key, set(), sort_direction=None)
+        self.callback(self.key, None, sort_direction=None) # Passa None para indicar remoção do filtro
         self.destroy()
 
     def _apply_and_close(self, sort_direction=None):
@@ -1289,14 +1363,17 @@ class FilterMenu(ctk.CTkToplevel):
         self.callback(self.key, selected_values, sort_direction)
         self.destroy()
 
-    def _on_focus_out(self, event):
-        """Fecha a janela se o foco for perdido."""
-        # Pequeno delay para evitar fechar ao clicar em um widget filho
-        self.after(100, self._check_focus)
-
-    def _check_focus(self):
-        if self.focus_get() is None:
+    def _on_click_outside(self, event):
+        """Verifica se o clique foi fora do menu e o fecha."""
+        if not (self.winfo_containing(event.x_root, event.y_root) == self):
             self.destroy()
+
+    def destroy(self):
+        """Sobrescreve o método destroy para limpar referências."""
+        if self.master_app.active_filter_menu == self:
+            self.master_app.active_filter_menu = None
+        self.master_app.unbind("<Button-1>") # Remove o bind para não acumular
+        super().destroy()
 
 if __name__ == "__main__":
     # --- Instalação de Dependências ---
