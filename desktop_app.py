@@ -242,6 +242,7 @@ class App(ctk.CTk):
         self.turmas_data = None # Cache para os dados das turmas (usado para encontrar o nível)
         self.active_filter_menu = None # Referência ao menu de filtro ativo
         self.add_student_toplevel = None # Referência para a janela de adicionar aluno
+        self.edit_student_toplevel = None # Referência para a janela de editar aluno
         self.last_student_add_data = {} # Guarda os últimos dados para preenchimento
         
         # Mapeamento de views para seus frames de controle
@@ -628,12 +629,14 @@ class App(ctk.CTk):
         frame = self.alunos_scroll_frame
 
         # Cabeçalhos (ordenados: Nome, depois Nível)
-        headers = ['Nome', 'Nível', 'Idade', 'Categoria', 'Turma', 'Horário', 'Professor']
+        headers = ['Nome', 'Nível', 'Idade', 'Categoria', 'Turma', 'Horário', 'Professor', ''] # Adicionado espaço para ações
         # Maior peso para a coluna Nome, pequeno peso para Nível, demais fixos
         frame.grid_columnconfigure(0, weight=2)
         frame.grid_columnconfigure(1, weight=1)
-        for col in range(2, len(headers)):
+        for col in range(2, 7): # Colunas de dados
             frame.grid_columnconfigure(col, weight=0)
+        frame.grid_columnconfigure(7, weight=0, minsize=80) # Coluna de ações
+
 
         def create_header_button(text, key):
             """Cria um botão de cabeçalho que aciona a ordenação."""
@@ -662,7 +665,11 @@ class App(ctk.CTk):
 
         header_labels = []
         for i, header_text in enumerate(headers):
-            key = header_text # Assume que o texto do cabeçalho é a chave nos dados
+            if not header_text: # Para a coluna de ações
+                ctk.CTkLabel(frame, text="Ações", font=ctk.CTkFont(size=12, weight="bold")).grid(row=0, column=i, padx=5, pady=4, sticky='ew')
+                continue
+
+            key = header_text
             header_button = create_header_button(header_text, key)
             header_button.grid(row=0, column=i, padx=5, pady=4, sticky='w' if header_text == 'Nome' else 'ew')
             header_labels.append(header_button)
@@ -683,6 +690,22 @@ class App(ctk.CTk):
             ctk.CTkLabel(frame, text=aluno.get('Horário', ''), anchor="center").grid(row=row_idx, column=5, padx=5, pady=2, sticky="ew")
             ctk.CTkLabel(frame, text=aluno.get('Professor', ''), anchor="center").grid(row=row_idx, column=6, padx=5, pady=2, sticky="ew")
 
+            # --- Coluna de Ações ---
+            actions_frame = ctk.CTkFrame(frame, fg_color="transparent")
+            actions_frame.grid(row=row_idx, column=7, padx=2, pady=0, sticky="ew")
+            actions_frame.grid_columnconfigure((0, 1), weight=1)
+
+            view_btn = ctk.CTkButton(actions_frame, text="ver", width=30, height=22, font=ctk.CTkFont(size=10),
+                                     fg_color="transparent", border_width=1,
+                                     command=lambda a=aluno: self.open_view_student_window(a))
+            view_btn.grid(row=0, column=0, padx=(0, 2), pady=1)
+
+            edit_btn = ctk.CTkButton(actions_frame, text="editar", width=30, height=22, font=ctk.CTkFont(size=10),
+                                     fg_color="transparent", border_width=1,
+                                     command=lambda a=aluno: self.open_edit_student_window(a))
+            edit_btn.grid(row=0, column=1, padx=(2, 0), pady=1)
+
+
         # Auto-ajusta largura mínima por coluna com base no conteúdo (como Excel)
         try:
             col_count = len(headers)
@@ -696,7 +719,7 @@ class App(ctk.CTk):
 
             # medir conteúdo: primeiro 50 linhas para eficiência
             sample = alunos_para_exibir[:50]
-            keys = ['Nome','Nível','Idade','Categoria','Turma','Horário','Professor']
+            keys = headers[:-1] # Todas as chaves exceto a de ações
             for row in sample:
                 for i in range(col_count):
                     key = keys[i]
@@ -865,6 +888,28 @@ class App(ctk.CTk):
         }
         self.add_student_toplevel = AddStudentToplevel(self, form_data, self.on_student_added)
 
+    def open_view_student_window(self, student_data):
+        """Abre uma janela Toplevel para visualizar os dados de um aluno."""
+        # Fecha qualquer janela de visualização que já esteja aberta
+        for w in self.winfo_children():
+            if isinstance(w, ViewStudentToplevel):
+                w.destroy()
+        
+        view_window = ViewStudentToplevel(self, student_data)
+        view_window.grab_set()
+
+    def open_edit_student_window(self, student_data):
+        """Abre a janela de formulário em modo de edição."""
+        if self.edit_student_toplevel is not None and self.edit_student_toplevel.winfo_exists():
+            self.edit_student_toplevel.lift()
+            return
+
+        form_data = {
+            "turmas": self.chamada_turma_combo.cget('values'),
+            "horarios": self.chamada_horario_combo.cget('values'),
+            "professores": [rb.cget('text') for rb in self.chamada_prof_frame.winfo_children() if isinstance(rb, ctk.CTkRadioButton)],
+        }
+        self.edit_student_toplevel = AddStudentToplevel(self, form_data, self.on_student_added, edit_data=student_data)
     def on_student_added(self, new_student_data):
         """Callback executado quando um aluno é adicionado com sucesso."""
         # 1. Salva os dados para persistência no próximo formulário
@@ -880,6 +925,8 @@ class App(ctk.CTk):
         self.show_view("Alunos")
         # 4. Limpa a referência da janela Toplevel
         self.add_student_toplevel = None
+        self.edit_student_toplevel = None
+
 
     def _center_toplevel(self, toplevel):
         toplevel.update_idletasks()
@@ -915,32 +962,63 @@ class App(ctk.CTk):
 
         return None
 
+    def _formatar_data_para_exibicao(self, data_str):
+        """Formata uma string de data (vários formatos) para dd/mm/YYYY."""
+        if not data_str:
+            return ""
+
+        # Se já for um objeto datetime
+        if isinstance(data_str, datetime):
+            return data_str.strftime('%d/%m/%Y')
+
+        data_text = str(data_str)
+        # Tenta formatos possíveis: ISO (YYYY-mm-ddT...), YYYY-mm-dd, ou o formato já desejado
+        for fmt in ('%Y-%m-%dT%H:%M:%S', '%Y-%m-%d', '%d/%m/%Y'):
+            try:
+                # Remove a parte da hora se existir
+                parsed_date = datetime.strptime(data_text.split('T')[0], fmt.split('T')[0])
+                return parsed_date.strftime('%d/%m/%Y')
+            except (ValueError, TypeError):
+                continue
+        
+        return data_text # Retorna o original se não conseguir parsear
 
 # --- NOVA CLASSE PARA O FORMULÁRIO DE ADIÇÃO DE ALUNO ---
 class AddStudentToplevel(ctk.CTkToplevel):
-    def __init__(self, master, form_data, on_success_callback):
+    def __init__(self, master, form_data, on_success_callback, edit_data=None):
         super().__init__(master)
         self.master_app = master
         self.form_data = form_data
         self.on_success = on_success_callback
+        self.edit_data = edit_data
+        self.is_edit_mode = edit_data is not None
 
-        self.title("Adicionar Novo Aluno")
+        if self.is_edit_mode:
+            self.title(f"Editar Aluno - {edit_data.get('Nome', '')}")
+        else:
+            self.title("Adicionar Novo Aluno")
+
         self.geometry("600x550") # Reduz a altura total da janela
         self.transient(master)
         self.grab_set()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.widgets = {}
+        # Carrega os dados de categorias e turmas da App principal
+        self.categorias_data = self.master_app.categorias_data
+        self.turmas_data = self.master_app.turmas_data
+
         self._build_form()
 
         self.after(10, lambda: self.master_app._center_toplevel(self))
-        self.after(100, lambda: self.widgets['nome'].focus_set()) # Foco automático no campo nome
+        self.after(100, lambda: self.widgets['nome'].focus_set())
 
     def _on_close(self):
         """Libera o foco e destrói a janela, limpando a referência na aplicação principal."""
         self.grab_release()
         self.destroy()
         self.master_app.add_student_toplevel = None # Limpa a referência na app principal
+        self.master_app.edit_student_toplevel = None
 
     def _build_form(self):
         """Constrói todos os widgets dentro do formulário."""
@@ -965,7 +1043,7 @@ class AddStudentToplevel(ctk.CTkToplevel):
         self.widgets['genero'] = ctk.CTkComboBox(form_frame, 
                                                  values=["Feminino", "Masculino", "Não Binário"],
                                                  width=120, height=30)
-        self.widgets['genero'].grid(row=1, column=1, padx=5, pady=(0, 10), sticky="ew")
+        self.widgets['genero'].grid(row=1, column=1, padx=5, pady=(0, 10), sticky="ew")        
         self.widgets['genero'].set("")
 
         # --- LINHA 2: Aniversário e Whatsapp ---
@@ -989,7 +1067,9 @@ class AddStudentToplevel(ctk.CTkToplevel):
                                                 values=self.form_data.get('turmas', []), 
                                                 command=on_field_change,
                                                 width=120, height=30)
-        self.widgets['turma'].grid(row=5, column=0, padx=5, pady=(0, 10), sticky="ew")
+        self.widgets['turma'].grid(row=5, column=0, padx=5, pady=(0, 10), sticky="ew")        
+        # Se não estiver em modo de edição, usa os últimos dados. Senão, usa os dados do aluno.
+        last_turma = self.form_data.get('last_data', {}).get("turma", "")
         self.widgets['turma'].set(self.form_data.get('last_data', {}).get("turma", ""))
 
         ctk.CTkLabel(form_frame, text="Horário:").grid(row=4, column=1, padx=5, pady=(5,0), sticky="w")
@@ -997,13 +1077,16 @@ class AddStudentToplevel(ctk.CTkToplevel):
                                                   values=self.form_data.get('horarios', []), 
                                                   command=on_field_change,
                                                   width=120, height=30)
-        self.widgets['horario'].grid(row=5, column=1, padx=5, pady=(0, 10), sticky="ew")
+        self.widgets['horario'].grid(row=5, column=1, padx=5, pady=(0, 10), sticky="ew")        
+        last_horario = self.form_data.get('last_data', {}).get("horario", "")
         self.widgets['horario'].set(self.form_data.get('last_data', {}).get("horario", ""))
 
         # --- LINHA 4: Professor e ParQ ---
         # Frame para Professor
         prof_container = ctk.CTkFrame(form_frame, fg_color="transparent")
         prof_container.grid(row=6, column=0, columnspan=2, padx=0, pady=0, sticky="ew")
+        
+        last_prof = self.form_data.get('last_data', {}).get("professor", "")
         ctk.CTkLabel(prof_container, text="Professor:").pack(anchor="w", padx=5)
         self.widgets['prof_var'] = tk.StringVar(value=self.form_data.get('last_data', {}).get("professor", ""))
         self.widgets['prof_var'].trace_add("write", on_field_change) # Garante que a mudança de professor atualize os campos
@@ -1016,7 +1099,8 @@ class AddStudentToplevel(ctk.CTkToplevel):
         parq_container = ctk.CTkFrame(form_frame, fg_color="transparent")
         parq_container.grid(row=7, column=0, columnspan=2, padx=0, pady=0, sticky="ew")
         ctk.CTkLabel(parq_container, text="ParQ Assinado:").pack(anchor="w", padx=5)
-        self.widgets['parq_var'] = tk.StringVar(value=self.form_data.get('last_data', {}).get("parQ", "Sim"))
+        last_parq = self.form_data.get('last_data', {}).get("parQ", "Sim")
+        self.widgets['parq_var'] = tk.StringVar(value=last_parq)
         parq_frame = ctk.CTkFrame(parq_container, fg_color="transparent")
         parq_frame.pack(fill="x", padx=5, pady=(0, 10), anchor="w")
         ctk.CTkRadioButton(parq_frame, text="Sim", variable=self.widgets['parq_var'], value="Sim").pack(side="left", padx=(0, 15))
@@ -1045,16 +1129,42 @@ class AddStudentToplevel(ctk.CTkToplevel):
         button_frame.grid_columnconfigure((0, 1), weight=1)
         
         # --- Botão Cancelar ---
-        cancel_button = ctk.CTkButton(button_frame, text="Cancelar", command=self._clear_personal_info_fields,
+        cancel_text = "Limpar" if not self.is_edit_mode else "Cancelar"
+        cancel_command = self._clear_personal_info_fields if not self.is_edit_mode else self._on_close
+        cancel_button = ctk.CTkButton(button_frame, text=cancel_text, command=cancel_command,
                                       fg_color="transparent", border_width=1,
                                       height=40)
         cancel_button.grid(row=0, column=0, padx=(0, 5), sticky="ew")
-        # --- Botão Adicionar ---
-        add_button = ctk.CTkButton(button_frame, text="Adicionar Aluno", command=self._submit, height=40)
+        # --- Botão Adicionar/Salvar ---
+        add_text = "Adicionar Aluno" if not self.is_edit_mode else "Salvar Alterações"
+        add_button = ctk.CTkButton(button_frame, text=add_text, command=self._submit, height=40)
         add_button.grid(row=0, column=1, padx=(5, 0), sticky="ew")
+
+        if self.is_edit_mode:
+            self._populate_form_for_edit()
+
         # Navegação com Enter
         self._set_enter_navigation()
         on_field_change() # Inicializa os campos derivados
+
+    def _populate_form_for_edit(self):
+        """Preenche o formulário com os dados do aluno para edição."""
+        if not self.edit_data:
+            return
+
+        self.widgets['nome'].insert(0, self.edit_data.get('Nome', ''))
+        self.widgets['genero'].set(self.edit_data.get('Gênero', ''))
+
+        # Formata a data de nascimento para dd/mm/YYYY
+        data_nasc_str = self.edit_data.get('Aniversario') or self.edit_data.get('Data de Nascimento')
+        if data_nasc_str:
+            self.widgets['data_nasc'].insert(0, self.master_app._formatar_data_para_exibicao(str(data_nasc_str)))
+
+        self.widgets['telefone'].insert(0, self.edit_data.get('Telefone', '') or self.edit_data.get('Whatsapp', ''))
+        self.widgets['turma'].set(self.edit_data.get('Turma', ''))
+        self.widgets['horario'].set(self.edit_data.get('Horário', ''))
+        self.widgets['prof_var'].set(self.edit_data.get('Professor', ''))
+        self.widgets['parq_var'].set(self.edit_data.get('ParQ', 'Sim'))
 
     def _set_enter_navigation(self):
         """Configura a tecla Enter para pular para o próximo widget."""
@@ -1102,21 +1212,36 @@ class AddStudentToplevel(ctk.CTkToplevel):
 
         # Envia para a API
         try:
-            # CORREÇÃO: O endpoint para criar um novo aluno é um POST para /api/aluno (singular).
-            response = requests.post(f"{API_BASE_URL}/api/aluno", json=data)
+            if self.is_edit_mode:
+                # Endpoint para ATUALIZAR um aluno existente
+                aluno_id = self.edit_data.get('id') # Supondo que a API retorna um 'id'
+                if not aluno_id:
+                    messagebox.showerror("Erro", "ID do aluno não encontrado. Não é possível salvar.", parent=self)
+                    return
+                response = requests.put(f"{API_BASE_URL}/api/aluno/{aluno_id}", json=data)
+                success_message = f"Dados de '{data['Nome']}' salvos com sucesso!"
+            else:
+                # Endpoint para CRIAR um novo aluno
+                response = requests.post(f"{API_BASE_URL}/api/aluno", json=data)
+                success_message = f"Aluno '{data['Nome']}' adicionado com sucesso!"
+
             response.raise_for_status()
             
-            messagebox.showinfo("Sucesso", f"Aluno '{data['Nome']}' adicionado com sucesso!", parent=self)
+            messagebox.showinfo("Sucesso", success_message, parent=self)
 
             # Chama o callback de sucesso na classe App
             if self.on_success:
                 self.on_success(data)
             
-            # Limpa os campos pessoais para a próxima adição, mantendo os da turma
-            self._clear_personal_info_fields()
+            if self.is_edit_mode:
+                self._on_close() # Fecha a janela após salvar
+            else:
+                # Limpa os campos pessoais para a próxima adição, mantendo os da turma
+                self._clear_personal_info_fields()
             
         except requests.exceptions.RequestException as e:
-            error_msg = f"Não foi possível adicionar o aluno.\n\nErro: {e}"
+            action = "salvar as alterações" if self.is_edit_mode else "adicionar o aluno"
+            error_msg = f"Não foi possível {action}.\n\nErro: {e}"
             try:
                 error_detail = e.response.json().get('detail', 'Erro desconhecido do servidor.')
                 error_msg += f"\nDetalhe: {error_detail}"
@@ -1206,7 +1331,7 @@ class AddStudentToplevel(ctk.CTkToplevel):
 
     def _definir_categoria(self, idade):
         """Define a categoria do aluno com base na idade e nos dados de categoria em cache."""
-        categorias_data = self.form_data.get('categorias_data')
+        categorias_data = self.categorias_data
         if idade is None or not categorias_data:
             return 'Não Categorizado'
         
@@ -1227,13 +1352,54 @@ class AddStudentToplevel(ctk.CTkToplevel):
         turma = widgets['turma'].get()
         horario = widgets['horario'].get()
         prof = widgets['prof_var'].get()
-        turmas_data = self.master_app.turmas_data
+        turmas_data = self.turmas_data
 
         if all([turma, horario, prof, turmas_data]):
             for t_info in turmas_data:
                 if (t_info.get("Turma") == turma and t_info.get("Horário") == horario and t_info.get("Professor") == prof):
                     return t_info.get("Nível", "-")
         return "-"
+
+# --- NOVA CLASSE PARA VISUALIZAÇÃO DE ALUNO ---
+class ViewStudentToplevel(ctk.CTkToplevel):
+    def __init__(self, master, student_data):
+        super().__init__(master)
+        self.master_app = master
+        self.student_data = student_data
+
+        self.title(f"Detalhes de {student_data.get('Nome', 'Aluno')}")
+        self.geometry("450x400")
+        self.transient(master)
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+
+        self._build_view()
+        self.after(10, lambda: self.master_app._center_toplevel(self))
+
+    def _build_view(self):
+        main_frame = ctk.CTkFrame(self, fg_color="transparent")
+        main_frame.pack(pady=15, padx=20, fill="both", expand=True)
+        main_frame.grid_columnconfigure(1, weight=1)
+
+        # Mapeamento de chaves de dados para labels de exibição
+        fields = {
+            "Nome": "Nome:", "Gênero": "Gênero:", "Aniversario": "Aniversário:",
+            "Whatsapp": "Whatsapp:", "Turma": "Turma:", "Horário": "Horário:",
+            "Professor": "Professor:", "Nível": "Nível:", "Idade": "Idade (no ano):",
+            "Categoria": "Categoria:", "ParQ": "ParQ Assinado:"
+        }
+
+        row = 0
+        for key, label_text in fields.items():
+            # Tenta obter o valor com várias chaves possíveis
+            value = self.student_data.get(key) or self.student_data.get(key.replace(" ", "_")) or self.student_data.get(key.lower())
+            if key == "Aniversario":
+                value = self.master_app._formatar_data_para_exibicao(value)
+
+            ctk.CTkLabel(main_frame, text=label_text, anchor="e", font=ctk.CTkFont(weight="bold")).grid(row=row, column=0, padx=(0, 10), pady=4, sticky="ew")
+            ctk.CTkLabel(main_frame, text=str(value if value is not None else "-"), anchor="w").grid(row=row, column=1, padx=0, pady=4, sticky="ew")
+            row += 1
+
+        ctk.CTkButton(main_frame, text="Fechar", command=self.destroy).grid(row=row, column=0, columnspan=2, pady=(20, 0), padx=50, sticky="ew")
 
 # --- CLASSE PARA O MENU DE FILTRO ESTILO EXCEL ---
 class FilterMenu(ctk.CTkFrame):
