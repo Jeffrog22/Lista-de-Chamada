@@ -1,49 +1,49 @@
 {
     "column_widths": {
-        "Nome": 250,
-        "N\u00edvel": 145,
-        "Idade": 81,
-        "Categoria": 138,
-        "Turma": 116,
-        "Hor\u00e1rio": 100,
-        "Professor": 126,
+        "Nome": 174,
+        "N\u00edvel": 19,
+        "Idade": 188,
+        "Categoria": 172,
+        "Turma": 127,
+        "Hor\u00e1rio": 86,
+        "Professor": 129,
         "": 80
     },
     "filter_menu_geometry": {
         "Nome": {
-            "width": 242,
-            "x": 98,
-            "y": 172
+            "width": 217,
+            "x": 89,
+            "y": 170
         },
         "N\u00edvel": {
-            "width": 126,
-            "x": 361,
-            "y": 172
+            "width": 129,
+            "x": 282,
+            "y": 170
         },
         "Idade": {
-            "width": 105,
-            "x": 491,
-            "y": 172
+            "width": 86,
+            "x": 409,
+            "y": 170
         },
         "Categoria": {
-            "width": 138,
-            "x": 587,
-            "y": 172
+            "width": 1,
+            "x": 0,
+            "y": 0
         },
         "Turma": {
-            "width": 135,
-            "x": 711,
-            "y": 172
+            "width": 137,
+            "x": 649,
+            "y": 170
         },
         "Hor\u00e1rio": {
-            "width": 113,
-            "x": 839,
-            "y": 172
+            "width": 1,
+            "x": 0,
+            "y": 0
         },
         "Professor": {
-            "width": 123,
-            "x": 938,
-            "y": 172
+            "width": 114,
+            "x": 893,
+            "y": 170
         }
     }
 }

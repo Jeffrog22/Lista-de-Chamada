@@ -120,7 +120,7 @@ class SearchableEntry(ctk.CTkEntry):
 
 class ColumnResizer(ctk.CTkFrame):
     """Um widget separador que permite redimensionar uma coluna de um grid."""
-    def __init__(self, master, grid_layout, column_index):
+    def __init__(self, master, grid_layout, column_index, app_instance):
         # A largura do frame define a área clicável. O cursor indica a funcionalidade.
         super().__init__(master, width=7, cursor="sb_h_double_arrow", fg_color="transparent")
         self.grid_layout = grid_layout
@@ -128,10 +128,15 @@ class ColumnResizer(ctk.CTkFrame):
         self._start_x = 0
         self._start_width = 0
 
+        self.app = app_instance # Armazena a referência da aplicação principal
         self.bind("<Button-1>", self._on_press)
         self.bind("<B1-Motion>", self._on_drag)
 
     def _on_press(self, event):
+        # Adiciona verificação do modo de edição do app principal
+        if not self.app.alunos_grid_edit_mode.get():
+            return
+
         self._start_x = event.x_root
         # Obtém a largura mínima atual da coluna que será redimensionada
         self._start_width = self.grid_layout.grid_columnconfigure(self.column_index)['minsize']
@@ -139,6 +144,10 @@ class ColumnResizer(ctk.CTkFrame):
     def _on_drag(self, event):
         delta_x = event.x_root - self._start_x
         new_width = max(10, self._start_width + delta_x) # Garante uma largura mínima de 10px
+        # Adiciona verificação do modo de edição do app principal
+        if not self.app.alunos_grid_edit_mode.get():
+            return
+
         self.grid_layout.grid_columnconfigure(self.column_index, minsize=new_width)
 
 class App(ctk.CTk):
@@ -240,12 +249,28 @@ class App(ctk.CTk):
         self.alunos_search_entry = ctk.CTkEntry(self.tab_view.tab("Alunos"), placeholder_text="Buscar por nome...")
         self.alunos_search_entry.grid(row=0, column=0, padx=10, pady=10, sticky="w")
         self.alunos_search_entry.bind("<KeyRelease>", self.filtrar_alunos_por_nome)
-
+        
+        # --- Frame para os botões de controle da grade de alunos ---
+        alunos_grid_controls_frame = ctk.CTkFrame(self.tab_view.tab("Alunos"), fg_color="transparent")
+        alunos_grid_controls_frame.grid(row=0, column=1, padx=(0, 10), pady=10, sticky="e")
+        
+        # Botão para ativar/desativar a edição da grade
+        button_width = 60 # Largura padrão para os botões
+        self.alunos_grid_edit_mode = tk.BooleanVar(value=False)
+        self.edit_grid_button = ctk.CTkButton(alunos_grid_controls_frame, text="Editar Layout",
+                                              width=button_width,
+                                              font=ctk.CTkFont(size=9),
+                                              command=self._toggle_grid_edit_mode)
+        self.edit_grid_button.pack(side="left", padx=(0, 5))
+        self._update_edit_button_color() # Define a cor inicial
+        
         # Botão para limpar todos os filtros e ordenação
-        self.clear_all_filters_sort_button = ctk.CTkButton(self.tab_view.tab("Alunos"), text="x", width=30, height=30,
-                                                            font=ctk.CTkFont(size=16, weight="bold"),
-                                                            command=self._clear_all_filters_and_sort)
-        self.clear_all_filters_sort_button.grid(row=0, column=1, padx=(0, 10), pady=10, sticky="e")
+        self.clear_all_filters_sort_button = ctk.CTkButton(alunos_grid_controls_frame, text="Limpar Filtros",
+                                                            width=button_width,
+                                                            font=ctk.CTkFont(size=9),
+                                                            command=self._clear_all_filters_and_sort,
+                                                            fg_color="transparent", border_width=1)
+        self.clear_all_filters_sort_button.pack(side="left")
 
         # Scroll frame para a lista de alunos
         self.alunos_scroll_frame = ctk.CTkScrollableFrame(self.tab_view.tab("Alunos"), label_text="Cadastro Geral de Alunos")
@@ -273,6 +298,7 @@ class App(ctk.CTk):
         self.filter_menu_geometry_cache = {} # Cache para a geometria dos menus de filtro
         self.column_widths_cache = {} # Cache para a largura das colunas da aba Alunos
         self.last_student_add_data = {} # Guarda os últimos dados para preenchimento
+        self.alunos_grid_resizers = [] # Lista para guardar os widgets de redimensionamento
         
         # Mapeamento de views para seus frames de controle
         self.control_frames = {
@@ -291,6 +317,7 @@ class App(ctk.CTk):
             with open("config.json", "r") as f:
                 config = json.load(f)
                 self.column_widths_cache = config.get("column_widths", {})
+
                 self.filter_menu_geometry_cache = config.get("filter_menu_geometry", {})
         except (FileNotFoundError, json.JSONDecodeError):
             self.column_widths_cache = {} # Se o arquivo não existe ou está corrompido, usa o padrão
@@ -298,18 +325,27 @@ class App(ctk.CTk):
 
     def _save_config(self):
         """Salva as configurações atuais do app em um arquivo JSON."""
-        config = {}
-        # 1. Salva a largura das colunas da aba Alunos
-        if self.alunos_scroll_frame.winfo_exists():
-            headers = ['Nome', 'Nível', 'Idade', 'Categoria', 'Turma', 'Horário', 'Professor', '']
-            current_widths = {headers[i]: self.alunos_scroll_frame.grid_columnconfigure(i)['minsize'] for i in range(len(headers))}
-            config["column_widths"] = current_widths
-        
-        # 2. Salva a geometria dos menus de filtro
-        config["filter_menu_geometry"] = self.filter_menu_geometry_cache
-        
-        with open("config.json", "w") as f:
-            json.dump(config, f, indent=4)
+        # Só salva se o modo de edição estiver habilitado, para evitar salvar em estado "fixo"
+        if self.alunos_grid_edit_mode.get():
+            # 1. Carrega a configuração existente para não sobrescrever dados não relacionados.
+            try:
+                with open("config.json", "r") as f:
+                    config = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                config = {}
+
+            # 2. Atualiza a largura das colunas da aba Alunos no dicionário de config
+            if self.alunos_scroll_frame.winfo_exists():
+                headers = ['Nome', 'Nível', 'Idade', 'Categoria', 'Turma', 'Horário', 'Professor', '']
+                current_widths = {headers[i]: self.alunos_scroll_frame.grid_columnconfigure(i)['minsize'] for i in range(len(headers))}
+                config["column_widths"] = current_widths
+
+            # 3. Atualiza a geometria dos menus de filtro no dicionário de config
+            config["filter_menu_geometry"] = self.filter_menu_geometry_cache
+
+            # 4. Salva o dicionário de configuração completo no arquivo
+            with open("config.json", "w", encoding='utf-8') as f:
+                json.dump(config, f, indent=4)
 
     def _on_app_close(self):
         """Executa ações de salvamento antes de fechar o app."""
@@ -660,6 +696,25 @@ class App(ctk.CTk):
         self.alunos_search_entry.delete(0, "end")
         self.filtrar_alunos_por_nome()
 
+    def _toggle_grid_edit_mode(self):
+        """Ativa ou desativa o modo de edição da grade de alunos."""
+        is_currently_editing = self.alunos_grid_edit_mode.get()
+        # Se o modo de edição estava ATIVO e será desativado, salva as configurações.
+        if is_currently_editing:
+            self._save_config()
+        self.alunos_grid_edit_mode.set(not self.alunos_grid_edit_mode.get())
+
+        self._update_edit_button_color()
+
+    def _update_edit_button_color(self):
+        """Atualiza a cor do botão de edição para indicar se está ativo."""
+        if self.alunos_grid_edit_mode.get():
+            # Cor padrão de botão ativo
+            self.edit_grid_button.configure(fg_color=("#3b8ed0", "#1f6aa5"), border_width=0)
+        else:
+            # Estilo "outline" para quando estiver inativo
+            self.edit_grid_button.configure(fg_color="transparent", border_width=1)
+
     def _apply_column_filters(self, data_list):
         """Aplica os filtros de coluna definidos em self.alunos_filter_state."""
         if not self.alunos_filter_state:
@@ -677,6 +732,7 @@ class App(ctk.CTk):
         """Constrói a grade de exibição na aba 'Alunos'."""
         for widget in self.alunos_scroll_frame.winfo_children():
             widget.destroy()
+        self.alunos_grid_resizers.clear() # Limpa a lista de resizers antigos
 
         if not alunos_para_exibir:
             ctk.CTkLabel(self.alunos_scroll_frame, text="Nenhum aluno encontrado.").pack(pady=20)
@@ -780,8 +836,9 @@ class App(ctk.CTk):
 
             # Adiciona um redimensionador após cada cabeçalho, exceto o último
             if i < len(headers) - 1:
-                resizer = ColumnResizer(frame, grid_layout=frame, column_index=i) 
+                resizer = ColumnResizer(frame, grid_layout=frame, column_index=i, app_instance=self) 
                 resizer.grid(row=0, column=i, rowspan=len(alunos_para_exibir) + 2, sticky='nse')
+                self.alunos_grid_resizers.append(resizer)
 
         # Linhas de Alunos
         for row_idx, aluno in enumerate(alunos_para_exibir, start=1):
@@ -1502,6 +1559,10 @@ class MenuResizer(ctk.CTkFrame):
 
     def _on_drag(self, event):
         """Calcula a nova largura com base no movimento do mouse e redimensiona o menu."""
+        # Verifica se o modo de edição está ativo na aplicação principal
+        if not self.master_menu.master_app.alunos_grid_edit_mode.get():
+            return
+
         delta_x = event.x_root - self._start_x
         min_width = 20 # Largura mínima para evitar que o menu desapareça
 
@@ -1558,15 +1619,15 @@ class FilterMenu(ctk.CTkFrame):
 
         ctk.CTkButton(sort_frame, 
                       text=asc_text, 
-                      height=24, 
-                      font=ctk.CTkFont(size=11), 
-                      anchor="w",
+                      height=22, 
+                      font=ctk.CTkFont(size=9), 
+                      anchor="center",
                       command=lambda: self._apply_and_close(sort_direction='asc')).pack(fill="x")
         ctk.CTkButton(sort_frame, 
                       text=desc_text, 
-                      height=24, 
-                      font=ctk.CTkFont(size=11), 
-                      anchor="w",
+                      height=22, 
+                      font=ctk.CTkFont(size=9), 
+                      anchor="center",
                       command=lambda: self._apply_and_close(sort_direction='desc')).pack(fill="x", pady=(2,0))
         
         # --- Linha divisória ---
@@ -1575,7 +1636,7 @@ class FilterMenu(ctk.CTkFrame):
         # --- Filtros ---
         filter_frame = ctk.CTkFrame(self, fg_color="transparent")
         filter_frame.pack(fill="x", padx=inner_padx)
-        ctk.CTkButton(filter_frame, text="Limpar Filtro", height=24, font=ctk.CTkFont(size=11), command=self._clear_filters).pack(fill="x")
+        ctk.CTkButton(filter_frame, text="Limpar Filtro", height=24, font=ctk.CTkFont(size=9), command=self._clear_filters).pack(fill="x")
 
         # --- Posicionamento e Cálculo de Altura (FEITO ANTES DE CRIAR O SCROLL FRAME) ---
         # Primeiro, calcula a posição e tamanho padrão
@@ -1583,10 +1644,7 @@ class FilterMenu(ctk.CTkFrame):
         default_width = max(200, button_widget.winfo_width())
         button_x_rel = button_widget.winfo_rootx() - master.winfo_rootx()
         default_y = button_widget.winfo_rooty() - master.winfo_rooty() + button_widget.winfo_height()
-        if self.key in ['Categoria', 'Horário', 'Professor']:
-            default_x = button_x_rel
-        else:
-            default_x = button_x_rel + 5
+        default_x = button_x_rel + 5
 
         # Verifica se há geometria em cache para esta coluna e a utiliza
         cached_geometry = self.master_app.filter_menu_geometry_cache.get(self.key)
@@ -1605,7 +1663,7 @@ class FilterMenu(ctk.CTkFrame):
 
         # --- Scrollable Frame para os checkboxes ---
         # O frame se expandirá para preencher o espaço vertical disponível.
-        scroll_frame = ctk.CTkScrollableFrame(self, label_text="Valores", label_font=ctk.CTkFont(size=11))
+        scroll_frame = ctk.CTkScrollableFrame(self, label_text="Valores", label_font=ctk.CTkFont(size=9))
         scroll_frame.pack(expand=True, fill="both", padx=inner_padx, pady=3)
 
 
@@ -1613,7 +1671,7 @@ class FilterMenu(ctk.CTkFrame):
         # Se o filtro para esta chave não existir, todos são selecionados por padrão.
         self.select_all_var = tk.BooleanVar(value=False) # Será definido abaixo
         ctk.CTkCheckBox(scroll_frame, text="(Tudo)", variable=self.select_all_var, 
-                        font=ctk.CTkFont(size=11),
+                        font=ctk.CTkFont(size=9),
                         command=lambda: self._toggle_all(self.select_all_var.get())).pack(anchor="w", padx=1)
 
         for value in values:
@@ -1636,12 +1694,13 @@ class FilterMenu(ctk.CTkFrame):
         self.place(x=x, y=y)
         self.lift()
 
-        # Adiciona os "puxadores" de redimensionamento em ambas as bordas do menu
-        right_resizer = MenuResizer(self, side="right")
-        right_resizer.place(relx=1.0, rely=0, relheight=1.0, anchor="ne")
+        # Adiciona os "puxadores" de redimensionamento apenas se o modo de edição estiver ativo
+        if self.master_app.alunos_grid_edit_mode.get():
+            right_resizer = MenuResizer(self, side="right")
+            right_resizer.place(relx=1.0, rely=0, relheight=1.0, anchor="ne")
 
-        left_resizer = MenuResizer(self, side="left")
-        left_resizer.place(relx=0.0, rely=0, relheight=1.0, anchor="nw")
+            left_resizer = MenuResizer(self, side="left")
+            left_resizer.place(relx=0.0, rely=0, relheight=1.0, anchor="nw")
 
         # Fecha o menu se o usuário clicar fora dele
         self.master_app.bind("<Button-1>", self._on_click_outside, add="+")
@@ -1694,13 +1753,14 @@ class FilterMenu(ctk.CTkFrame):
 
     def destroy(self):
         """Sobrescreve o método destroy para limpar referências."""
-        # Salva a geometria atual (largura, x, y) no cache da aplicação principal
-        if self.winfo_exists(): # Garante que a janela ainda existe ao obter a geometria
-            self.master_app.filter_menu_geometry_cache[self.key] = {
-                'width': self.winfo_width(),
-                'x': self.winfo_x(),
-                'y': self.winfo_y()
-            }
+        # Salva a geometria apenas se o modo de edição estiver ativo
+        if self.master_app.alunos_grid_edit_mode.get():
+            if self.winfo_exists(): # Garante que a janela ainda existe ao obter a geometria
+                self.master_app.filter_menu_geometry_cache[self.key] = {
+                    'width': self.winfo_width(),
+                    'x': self.winfo_x(),
+                    'y': self.winfo_y()
+                }
 
         if self.master_app.active_filter_menu == self:
             self.master_app.active_filter_menu = None
