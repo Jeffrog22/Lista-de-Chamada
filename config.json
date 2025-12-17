@@ -1,0 +1,49 @@
+{
+    "column_widths": {
+        "Nome": 250,
+        "N\u00edvel": 145,
+        "Idade": 81,
+        "Categoria": 138,
+        "Turma": 116,
+        "Hor\u00e1rio": 100,
+        "Professor": 126,
+        "": 80
+    },
+    "filter_menu_geometry": {
+        "Nome": {
+            "width": 242,
+            "x": 98,
+            "y": 172
+        },
+        "N\u00edvel": {
+            "width": 126,
+            "x": 361,
+            "y": 172
+        },
+        "Idade": {
+            "width": 105,
+            "x": 491,
+            "y": 172
+        },
+        "Categoria": {
+            "width": 138,
+            "x": 587,
+            "y": 172
+        },
+        "Turma": {
+            "width": 135,
+            "x": 711,
+            "y": 172
+        },
+        "Hor\u00e1rio": {
+            "width": 113,
+            "x": 839,
+            "y": 172
+        },
+        "Professor": {
+            "width": 123,
+            "x": 938,
+            "y": 172
+        }
+    }
+}

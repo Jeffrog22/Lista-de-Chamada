@@ -1,6 +1,7 @@
 import customtkinter as ctk
 import tkinter as tk
 from tkinter import messagebox
+import json
 from tkinter import font as tkfont
 import requests
 import threading
@@ -147,6 +148,7 @@ class App(ctk.CTk):
         self.title("Gerenciador de Chamadas")
         self.geometry("1200x700")
         ctk.set_appearance_mode("System")
+        self.protocol("WM_DELETE_WINDOW", self._on_app_close) # Salva config ao fechar
 
         # --- ESTRUTURA PRINCIPAL ---
         # Coluna 0: Sidebar (pode ser escondida), Coluna 1: Conteúdo Principal
@@ -268,6 +270,8 @@ class App(ctk.CTk):
         self.active_filter_menu = None # Referência ao menu de filtro ativo
         self.add_student_toplevel = None # Referência para a janela de adicionar aluno
         self.edit_student_toplevel = None # Referência para a janela de editar aluno
+        self.filter_menu_geometry_cache = {} # Cache para a geometria dos menus de filtro
+        self.column_widths_cache = {} # Cache para a largura das colunas da aba Alunos
         self.last_student_add_data = {} # Guarda os últimos dados para preenchimento
         
         # Mapeamento de views para seus frames de controle
@@ -277,8 +281,40 @@ class App(ctk.CTk):
 
         # --- INICIALIZAÇÃO ---
         self.carregar_filtros_iniciais()
+        self._load_config() # Carrega as configurações salvas
         self.run_in_thread(self.carregar_lista_turmas) # Carrega dados de turmas em background para o form
         self.show_main_menu() # Garante que o menu principal seja exibido no início
+
+    def _load_config(self):
+        """Carrega configurações do app de um arquivo JSON."""
+        try:
+            with open("config.json", "r") as f:
+                config = json.load(f)
+                self.column_widths_cache = config.get("column_widths", {})
+                self.filter_menu_geometry_cache = config.get("filter_menu_geometry", {})
+        except (FileNotFoundError, json.JSONDecodeError):
+            self.column_widths_cache = {} # Se o arquivo não existe ou está corrompido, usa o padrão
+            self.filter_menu_geometry_cache = {}
+
+    def _save_config(self):
+        """Salva as configurações atuais do app em um arquivo JSON."""
+        config = {}
+        # 1. Salva a largura das colunas da aba Alunos
+        if self.alunos_scroll_frame.winfo_exists():
+            headers = ['Nome', 'Nível', 'Idade', 'Categoria', 'Turma', 'Horário', 'Professor', '']
+            current_widths = {headers[i]: self.alunos_scroll_frame.grid_columnconfigure(i)['minsize'] for i in range(len(headers))}
+            config["column_widths"] = current_widths
+        
+        # 2. Salva a geometria dos menus de filtro
+        config["filter_menu_geometry"] = self.filter_menu_geometry_cache
+        
+        with open("config.json", "w") as f:
+            json.dump(config, f, indent=4)
+
+    def _on_app_close(self):
+        """Executa ações de salvamento antes de fechar o app."""
+        self._save_config()
+        self.destroy()
 
     def toggle_sidebar(self):
         """Mostra ou esconde o painel lateral."""
@@ -690,10 +726,11 @@ class App(ctk.CTk):
         
         # Define as larguras iniciais. O usuário poderá ajustá-las manualmente.
         initial_widths = {'Nome': 250, 'Nível': 80, 'Idade': 50, 'Categoria': 100, 'Turma': 100, 'Horário': 100, 'Professor': 120, '': 80}
-        for i, header in enumerate(headers): # Garante que a coluna de ações tenha uma largura mínima
-            # Define a largura da coluna com base no dicionário.
-            width = initial_widths.get(header, 80) # Usa 80 como padrão se não encontrar
-            # Define o peso como 0 para todas as colunas para desativar o auto-ajuste.
+        for i, header_text in enumerate(headers):
+            # Usa a largura do cache se existir, senão usa a largura inicial padrão
+            width = self.column_widths_cache.get(header_text, initial_widths.get(header_text, 80))
+            
+            # Define o peso como 0 para desativar o auto-ajuste.
             weight = 0
             # Define a configuração para cada coluna sequencial (0, 1, 2, ...)
             frame.grid_columnconfigure(i, weight=weight, minsize=width)
@@ -749,11 +786,11 @@ class App(ctk.CTk):
         # Linhas de Alunos
         for row_idx, aluno in enumerate(alunos_para_exibir, start=1):
             # Coluna 0: Nome (menos espaçamento à direita para aproximar do Nível)
-            name_lbl = ctk.CTkLabel(self.alunos_scroll_frame, text=aluno.get('Nome', ''), anchor="w")
-            name_lbl.grid(row=row_idx, column=0, padx=(5, 2), pady=2, sticky="") # Removido sticky="ew"
+            name_lbl = ctk.CTkLabel(self.alunos_scroll_frame, text=aluno.get('Nome', ''), anchor="e")
+            name_lbl.grid(row=row_idx, column=0, padx=(5, 2), pady=2, sticky="w")
             # Colunas seguintes: Removido o 'sticky="ew"' para permitir que as colunas encolham além da largura do texto.
             nivel_lbl = ctk.CTkLabel(self.alunos_scroll_frame, text=aluno.get('Nível', ''), anchor="center")
-            nivel_lbl.grid(row=row_idx, column=1, padx=2, pady=2, sticky="")
+            nivel_lbl.grid(row=row_idx, column=1, padx=2, pady=2)
             ctk.CTkLabel(self.alunos_scroll_frame, text=str(aluno.get('Idade', '')), anchor="center").grid(row=row_idx, column=2, padx=2, pady=2)
             ctk.CTkLabel(self.alunos_scroll_frame, text=aluno.get('Categoria', ''), anchor="center").grid(row=row_idx, column=3, padx=2, pady=2)
             ctk.CTkLabel(self.alunos_scroll_frame, text=aluno.get('Turma', ''), anchor="center").grid(row=row_idx, column=4, padx=2, pady=2)
@@ -809,7 +846,7 @@ class App(ctk.CTk):
         if not self.all_students_data or self.active_filter_menu: return
 
         # Coleta valores únicos da coluna
-        unique_values = sorted(list(set(str(aluno.get(key, '')) for aluno in self.all_students_data if aluno.get(key))))
+        unique_values = sorted(list(set(str(aluno.get(key, '')) for aluno in self.all_students_data if aluno.get(key) or str(aluno.get(key, '')) == '0')))
 
         # Cria e exibe o menu
         self.active_filter_menu = FilterMenu(self, key, unique_values, button_widget, self._apply_filter_and_sort)
@@ -1444,6 +1481,41 @@ class ViewStudentToplevel(ctk.CTkToplevel):
 
         ctk.CTkButton(main_frame, text="Fechar", command=self.destroy).grid(row=row, column=0, columnspan=2, pady=(20, 0), padx=50, sticky="ew")
 
+class MenuResizer(ctk.CTkFrame):
+    """Um widget que permite redimensionar a largura de seu widget mestre (o menu) a partir da esquerda ou direita."""
+    def __init__(self, master, side="right"):
+        super().__init__(master, width=7, cursor="sb_h_double_arrow", fg_color="transparent")
+        self.master_menu = master
+        self.side = side
+        self._start_x = 0
+        self._start_width = 0
+        self._start_menu_x = 0
+
+        self.bind("<Button-1>", self._on_press)
+        self.bind("<B1-Motion>", self._on_drag)
+
+    def _on_press(self, event):
+        """Captura a posição inicial do mouse e a largura atual do menu."""
+        self._start_x = event.x_root
+        self._start_width = self.master_menu.winfo_width()
+        self._start_menu_x = self.master_menu.winfo_x()
+
+    def _on_drag(self, event):
+        """Calcula a nova largura com base no movimento do mouse e redimensiona o menu."""
+        delta_x = event.x_root - self._start_x
+        min_width = 20 # Largura mínima para evitar que o menu desapareça
+
+        if self.side == "right":
+            new_width = max(min_width, self._start_width + delta_x)
+            self.master_menu.configure(width=new_width)
+        elif self.side == "left":
+            # Ao arrastar para a esquerda, a largura aumenta e a posição X diminui
+            new_width = max(min_width, self._start_width - delta_x)
+            new_x = self._start_menu_x + delta_x
+            self.master_menu.configure(width=new_width)
+            self.master_menu.place_configure(x=new_x) # Reposiciona o menu
+
+
 # --- CLASSE PARA O MENU DE FILTRO ESTILO EXCEL ---
 class FilterMenu(ctk.CTkFrame):
     # --- CONFIGURAÇÃO DE ALTURA ---
@@ -1454,13 +1526,6 @@ class FilterMenu(ctk.CTkFrame):
         # O master agora é a janela principal da aplicação (App).
         # A altura será definida depois que o conteúdo for criado.
         super().__init__(master, corner_radius=8, border_width=1)
-        # A altura será definida depois. Define uma largura mínima para garantir a legibilidade.
-        super().__init__(master, corner_radius=8, border_width=1, width=200)
-
-        # Define a largura do menu para ser igual à da coluna clicada
-        # Impede que os widgets filhos redimensionem o menu (a largura é fixa)
-        self.configure(width=button_widget.winfo_width())
-        self.pack_propagate(False) # Impede que os widgets filhos redimensionem o menu
 
         self.key = key
         self.callback = callback
@@ -1485,7 +1550,7 @@ class FilterMenu(ctk.CTkFrame):
         if self.key in ['Nome', 'Turma', 'Professor']:
             asc_text, desc_text = "Ordenar A-Z", "Ordenar Z-A"
         elif self.key in ['Idade', 'Horário']:
-            asc_text, desc_text = "Ordenar do Menor para o Maior", "Ordenar do Maior para o Menor"
+            asc_text, desc_text = "Ordenar < para >", "Ordenar > para <"
         elif self.key in ['Nível', 'Categoria']:
             asc_text, desc_text = "Ordenar < para >", "Ordenar > para <"
         else:
@@ -1513,17 +1578,30 @@ class FilterMenu(ctk.CTkFrame):
         ctk.CTkButton(filter_frame, text="Limpar Filtro", height=24, font=ctk.CTkFont(size=11), command=self._clear_filters).pack(fill="x")
 
         # --- Posicionamento e Cálculo de Altura (FEITO ANTES DE CRIAR O SCROLL FRAME) ---
+        # Primeiro, calcula a posição e tamanho padrão
         self.update_idletasks()
-        x = button_widget.winfo_rootx() - master.winfo_rootx()
-        y = button_widget.winfo_rooty() - master.winfo_rooty() + button_widget.winfo_height()
+        default_width = max(200, button_widget.winfo_width())
+        button_x_rel = button_widget.winfo_rootx() - master.winfo_rootx()
+        default_y = button_widget.winfo_rooty() - master.winfo_rooty() + button_widget.winfo_height()
+        if self.key in ['Categoria', 'Horário', 'Professor']:
+            default_x = button_x_rel
+        else:
+            default_x = button_x_rel + 5
+
+        # Verifica se há geometria em cache para esta coluna e a utiliza
+        cached_geometry = self.master_app.filter_menu_geometry_cache.get(self.key)
+        initial_width = cached_geometry.get('width', default_width) if cached_geometry else default_width
+        x = cached_geometry.get('x', default_x) if cached_geometry else default_x
+        y = cached_geometry.get('y', default_y) if cached_geometry else default_y
 
         if self.MANUAL_HEIGHT is not None:
             menu_height = self.MANUAL_HEIGHT
         else:
             # Calcula a altura máxima permitida para o menu não sair da tela
-            menu_height = master.winfo_height() - y - 15 # 15px de margem inferior
+            menu_height = master.winfo_height() - default_y - 15 # Usa o Y padrão para o cálculo de altura máxima
         
-        self.configure(height=menu_height)
+        self.configure(width=initial_width, height=menu_height)
+        self.pack_propagate(False)
 
         # --- Scrollable Frame para os checkboxes ---
         # O frame se expandirá para preencher o espaço vertical disponível.
@@ -1557,6 +1635,13 @@ class FilterMenu(ctk.CTkFrame):
         # Posiciona o menu
         self.place(x=x, y=y)
         self.lift()
+
+        # Adiciona os "puxadores" de redimensionamento em ambas as bordas do menu
+        right_resizer = MenuResizer(self, side="right")
+        right_resizer.place(relx=1.0, rely=0, relheight=1.0, anchor="ne")
+
+        left_resizer = MenuResizer(self, side="left")
+        left_resizer.place(relx=0.0, rely=0, relheight=1.0, anchor="nw")
 
         # Fecha o menu se o usuário clicar fora dele
         self.master_app.bind("<Button-1>", self._on_click_outside, add="+")
@@ -1609,6 +1694,14 @@ class FilterMenu(ctk.CTkFrame):
 
     def destroy(self):
         """Sobrescreve o método destroy para limpar referências."""
+        # Salva a geometria atual (largura, x, y) no cache da aplicação principal
+        if self.winfo_exists(): # Garante que a janela ainda existe ao obter a geometria
+            self.master_app.filter_menu_geometry_cache[self.key] = {
+                'width': self.winfo_width(),
+                'x': self.winfo_x(),
+                'y': self.winfo_y()
+            }
+
         if self.master_app.active_filter_menu == self:
             self.master_app.active_filter_menu = None
         self.master_app.unbind("<Button-1>") # Remove o bind para não acumular
