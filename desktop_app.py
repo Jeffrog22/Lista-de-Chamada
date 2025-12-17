@@ -117,6 +117,29 @@ class SearchableEntry(ctk.CTkEntry):
         self.insert(0, text)
         self._hide_suggestions()
 
+class ColumnResizer(ctk.CTkFrame):
+    """Um widget separador que permite redimensionar uma coluna de um grid."""
+    def __init__(self, master, grid_layout, column_index):
+        # A largura do frame define a área clicável. O cursor indica a funcionalidade.
+        super().__init__(master, width=7, cursor="sb_h_double_arrow", fg_color="transparent")
+        self.grid_layout = grid_layout
+        self.column_index = column_index
+        self._start_x = 0
+        self._start_width = 0
+
+        self.bind("<Button-1>", self._on_press)
+        self.bind("<B1-Motion>", self._on_drag)
+
+    def _on_press(self, event):
+        self._start_x = event.x_root
+        # Obtém a largura mínima atual da coluna que será redimensionada
+        self._start_width = self.grid_layout.grid_columnconfigure(self.column_index)['minsize']
+
+    def _on_drag(self, event):
+        delta_x = event.x_root - self._start_x
+        new_width = max(10, self._start_width + delta_x) # Garante uma largura mínima de 10px
+        self.grid_layout.grid_columnconfigure(self.column_index, minsize=new_width)
+
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -208,21 +231,23 @@ class App(ctk.CTk):
         # Configura o grid da aba Alunos para ter uma linha para a busca e outra para a lista
         self.tab_view.tab("Alunos").grid_columnconfigure(0, weight=1)
         self.tab_view.tab("Alunos").grid_rowconfigure(0, weight=0) # Linha da busca (altura fixa)
+        self.tab_view.tab("Alunos").grid_columnconfigure(1, weight=0) # Coluna para o botão 'x'
         self.tab_view.tab("Alunos").grid_rowconfigure(1, weight=1) # Linha da lista (expansível)
 
         # Widget de busca por nome na aba Alunos
         self.alunos_search_entry = ctk.CTkEntry(self.tab_view.tab("Alunos"), placeholder_text="Buscar por nome...")
         self.alunos_search_entry.grid(row=0, column=0, padx=10, pady=10, sticky="w")
         self.alunos_search_entry.bind("<KeyRelease>", self.filtrar_alunos_por_nome)
-        
-        # Botão para limpar a ordenação
-        self.clear_sort_button = ctk.CTkButton(self.tab_view.tab("Alunos"), text="Limpar Ordenação", width=120,
-                                               command=self.limpar_ordenacao_alunos)
-        self.clear_sort_button.grid(row=0, column=0, padx=10, pady=10, sticky="e")        
+
+        # Botão para limpar todos os filtros e ordenação
+        self.clear_all_filters_sort_button = ctk.CTkButton(self.tab_view.tab("Alunos"), text="x", width=30, height=30,
+                                                            font=ctk.CTkFont(size=16, weight="bold"),
+                                                            command=self._clear_all_filters_and_sort)
+        self.clear_all_filters_sort_button.grid(row=0, column=1, padx=(0, 10), pady=10, sticky="e")
 
         # Scroll frame para a lista de alunos
         self.alunos_scroll_frame = ctk.CTkScrollableFrame(self.tab_view.tab("Alunos"), label_text="Cadastro Geral de Alunos")
-        self.alunos_scroll_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        self.alunos_scroll_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=10, pady=(0, 10))
 
         # --- 2.4. Conteúdo da Aba "Turmas" ---
         self.tab_view.tab("Turmas").grid_columnconfigure(0, weight=1)
@@ -591,10 +616,12 @@ class App(ctk.CTk):
         # Reconstrói o grid com os dados duplamente filtrados
         self._construir_grid_alunos(alunos_filtrados)
 
-    def limpar_ordenacao_alunos(self):
-        """Reseta o estado de ordenação e reconstrói a grade."""
+    def _clear_all_filters_and_sort(self):
+        """Reseta o estado de ordenação e todos os filtros, e reconstrói a grade."""
         self.alunos_sort_state = {'key': None, 'reverse': False}
-        # Usa a função de filtro para re-exibir a lista (respeitando a busca, se houver)
+        self.alunos_filter_state = {}
+        # Limpa o texto da busca para garantir que todos os alunos sejam exibidos após a limpeza
+        self.alunos_search_entry.delete(0, "end")
         self.filtrar_alunos_por_nome()
 
     def _apply_column_filters(self, data_list):
@@ -657,115 +684,100 @@ class App(ctk.CTk):
 
             alunos_para_exibir = sorted(alunos_para_exibir, key=get_sort_value, reverse=sort_reverse)
 
+        # O frame onde os widgets serão colocados é o próprio CTkScrollableFrame.
         frame = self.alunos_scroll_frame
-
-        # Cabeçalhos (ordenados: Nome, depois Nível)
         headers = ['Nome', 'Nível', 'Idade', 'Categoria', 'Turma', 'Horário', 'Professor', ''] # Adicionado espaço para ações
-        # Maior peso para a coluna Nome, pequeno peso para Nível, demais fixos
-        frame.grid_columnconfigure(0, weight=2)
-        frame.grid_columnconfigure(1, weight=1)
-        for col in range(2, 7): # Colunas de dados
-            frame.grid_columnconfigure(col, weight=0)
-        frame.grid_columnconfigure(7, weight=0, minsize=80) # Coluna de ações
+        
+        # Define as larguras iniciais. O usuário poderá ajustá-las manualmente.
+        initial_widths = {'Nome': 250, 'Nível': 80, 'Idade': 50, 'Categoria': 100, 'Turma': 100, 'Horário': 100, 'Professor': 120, '': 80}
+        for i, header in enumerate(headers): # Garante que a coluna de ações tenha uma largura mínima
+            # Define a largura da coluna com base no dicionário.
+            width = initial_widths.get(header, 80) # Usa 80 como padrão se não encontrar
+            # Define o peso como 0 para todas as colunas para desativar o auto-ajuste.
+            weight = 0
+            # Define a configuração para cada coluna sequencial (0, 1, 2, ...)
+            frame.grid_columnconfigure(i, weight=weight, minsize=width)
 
-
-        def create_header_button(text, key):
-            """Cria um botão de cabeçalho que aciona a ordenação."""
-            # Define a cor de fundo padrão e a cor de destaque para o cabeçalho ativo
-            fg_color = "transparent"
-            hover_color = ("gray75", "gray25") # Cor padrão ao passar o mouse
+        def create_header_widget(text, key):
+            """
+            Cria um Label para o cabeçalho. Se o cabeçalho estiver ativo (ordenado/filtrado),
+            cria um Botão para indicar visualmente. Isso permite que colunas inativas
+            sejam muito mais estreitas, pois Labels têm menos largura intrínseca.
+            """
             display_text = text
+            is_active = self.alunos_sort_state.get('key') == key or (key in self.alunos_filter_state and self.alunos_filter_state[key])
 
             if self.alunos_sort_state.get('key') == key:
                 sort_arrow = '▼' if self.alunos_sort_state.get('reverse') else '▲'
                 display_text = f"{text} {sort_arrow}"
-                # Altera a cor de fundo se esta for a coluna de ordenação
-                fg_color = ("#e0e2e4", "#4a4d50") # Uma cor de destaque sutil
-                hover_color = ("#d3d5d7", "#5a5d60") # Um tom um pouco mais escuro para o hover
-            
-            # Adiciona um ícone de filtro se um filtro estiver ativo para esta coluna
-            if key in self.alunos_filter_state and self.alunos_filter_state[key]:
+            elif key in self.alunos_filter_state and self.alunos_filter_state[key]:
                 display_text += " ▾" # Um ícone simples para indicar filtro
 
-            return ctk.CTkButton(frame, text=display_text,
-                                 fg_color=fg_color, hover_color=hover_color,
-                                 text_color=("gray10", "gray90"),
-                                 font=ctk.CTkFont(size=12, weight="bold"),
-                                 # O comando agora abre o menu de filtro
-                                 command=lambda k=key, b=None: self._open_filter_menu(k, b))
+            # Se estiver ativo, usa um botão para dar feedback visual. Senão, um label.
+            if is_active:
+                widget = ctk.CTkButton(frame, text=display_text,
+                                     fg_color=("#e0e2e4", "#4a4d50"), hover_color=("#d3d5d7", "#5a5d60"),
+                                     text_color=("gray10", "gray90"), font=ctk.CTkFont(size=12, weight="bold"))
+            else:
+                widget = ctk.CTkLabel(frame, text=display_text,
+                                    font=ctk.CTkFont(size=12, weight="bold"),
+                                    text_color=("gray10", "gray90"))
+                # Adiciona um bind para que o label se comporte como um botão ao clicar
+                widget.bind("<Button-1>", lambda e, k=key, w=widget: self._open_filter_menu(k, w))
 
-        header_labels = []
+            # O comando para abrir o menu é configurado separadamente para o botão
+            if isinstance(widget, ctk.CTkButton):
+                widget.configure(command=lambda k=key, w=widget: self._open_filter_menu(k, w))
+
+            return widget
+
         for i, header_text in enumerate(headers):
-            if not header_text: # Para a coluna de ações
-                ctk.CTkLabel(frame, text="Ações", font=ctk.CTkFont(size=12, weight="bold")).grid(row=0, column=i, padx=5, pady=4, sticky='ew')
+            if not header_text: # Cabeçalho da coluna de ações
+                ctk.CTkLabel(self.alunos_scroll_frame, text="Ações", font=ctk.CTkFont(size=12, weight="bold")).grid(row=0, column=i, padx=2, pady=4, sticky='ns')
                 continue
 
             key = header_text
-            header_button = create_header_button(header_text, key)
-            header_button.grid(row=0, column=i, padx=5, pady=4, sticky='w' if header_text == 'Nome' else 'ew')
-            header_labels.append(header_button)
-            # Atualiza a referência do botão no comando lambda
-            header_button.configure(command=lambda k=key, b=header_button: self._open_filter_menu(k, b))
+            header_widget = create_header_widget(header_text, key)
+            # Usa sticky="ns" para centralizar verticalmente e permitir que o resizer ocupe o espaço horizontal.
+            header_widget.grid(row=0, column=i, padx=0, pady=4, sticky='ns')
+
+            # Adiciona um redimensionador após cada cabeçalho, exceto o último
+            if i < len(headers) - 1:
+                resizer = ColumnResizer(frame, grid_layout=frame, column_index=i) 
+                resizer.grid(row=0, column=i, rowspan=len(alunos_para_exibir) + 2, sticky='nse')
 
         # Linhas de Alunos
         for row_idx, aluno in enumerate(alunos_para_exibir, start=1):
             # Coluna 0: Nome (menos espaçamento à direita para aproximar do Nível)
-            name_lbl = ctk.CTkLabel(frame, text=aluno.get('Nome', ''), anchor="w")
-            name_lbl.grid(row=row_idx, column=0, padx=(10,3), pady=2, sticky="w")
-            # Coluna 1: Nível (centralizada)
-            nivel_lbl = ctk.CTkLabel(frame, text=aluno.get('Nível', ''), anchor="center")
-            nivel_lbl.grid(row=row_idx, column=1, padx=(3,10), pady=2, sticky="ew")
-            ctk.CTkLabel(frame, text=str(aluno.get('Idade', '')), anchor="center").grid(row=row_idx, column=2, padx=5, pady=2, sticky="ew")
-            ctk.CTkLabel(frame, text=aluno.get('Categoria', ''), anchor="center").grid(row=row_idx, column=3, padx=5, pady=2, sticky="ew")
-            ctk.CTkLabel(frame, text=aluno.get('Turma', ''), anchor="center").grid(row=row_idx, column=4, padx=5, pady=2, sticky="ew")
-            ctk.CTkLabel(frame, text=aluno.get('Horário', ''), anchor="center").grid(row=row_idx, column=5, padx=5, pady=2, sticky="ew")
-            ctk.CTkLabel(frame, text=aluno.get('Professor', ''), anchor="center").grid(row=row_idx, column=6, padx=5, pady=2, sticky="ew")
+            name_lbl = ctk.CTkLabel(self.alunos_scroll_frame, text=aluno.get('Nome', ''), anchor="w")
+            name_lbl.grid(row=row_idx, column=0, padx=(5, 2), pady=2, sticky="") # Removido sticky="ew"
+            # Colunas seguintes: Removido o 'sticky="ew"' para permitir que as colunas encolham além da largura do texto.
+            nivel_lbl = ctk.CTkLabel(self.alunos_scroll_frame, text=aluno.get('Nível', ''), anchor="center")
+            nivel_lbl.grid(row=row_idx, column=1, padx=2, pady=2, sticky="")
+            ctk.CTkLabel(self.alunos_scroll_frame, text=str(aluno.get('Idade', '')), anchor="center").grid(row=row_idx, column=2, padx=2, pady=2)
+            ctk.CTkLabel(self.alunos_scroll_frame, text=aluno.get('Categoria', ''), anchor="center").grid(row=row_idx, column=3, padx=2, pady=2)
+            ctk.CTkLabel(self.alunos_scroll_frame, text=aluno.get('Turma', ''), anchor="center").grid(row=row_idx, column=4, padx=2, pady=2)
+            ctk.CTkLabel(self.alunos_scroll_frame, text=aluno.get('Horário', ''), anchor="center").grid(row=row_idx, column=5, padx=2, pady=2)
+            ctk.CTkLabel(self.alunos_scroll_frame, text=aluno.get('Professor', ''), anchor="center").grid(row=row_idx, column=6, padx=2, pady=2)
 
             # --- Coluna de Ações ---
-            actions_frame = ctk.CTkFrame(frame, fg_color="transparent")
-            actions_frame.grid(row=row_idx, column=7, padx=2, pady=0, sticky="ew")
-            actions_frame.grid_columnconfigure((0, 1), weight=1)
+            actions_frame = ctk.CTkFrame(self.alunos_scroll_frame, fg_color="transparent")
+            actions_frame.grid(row=row_idx, column=7, padx=1, pady=0, sticky="")
 
             view_btn = ctk.CTkButton(actions_frame, text="ver", width=30, height=22, font=ctk.CTkFont(size=10),
                                      fg_color="transparent", border_width=1,
                                      command=lambda a=aluno: self.open_view_student_window(a))
-            view_btn.grid(row=0, column=0, padx=(0, 2), pady=1)
+            view_btn.grid(row=0, column=0, padx=(0, 2), pady=1, sticky="")
 
             edit_btn = ctk.CTkButton(actions_frame, text="editar", width=30, height=22, font=ctk.CTkFont(size=10),
                                      fg_color="transparent", border_width=1,
                                      command=lambda a=aluno: self.open_edit_student_window(a))
-            edit_btn.grid(row=0, column=1, padx=(2, 0), pady=1)
+            edit_btn.grid(row=0, column=1, padx=(2, 0), pady=1, sticky="")
 
-
-        # Auto-ajusta largura mínima por coluna com base no conteúdo (como Excel)
-        try:
-            col_count = len(headers)
-            max_widths = [0] * col_count
-
-            # medir cabeçalhos
-            for i, lbl in enumerate(header_labels):
-                f = tkfont.Font(font=lbl.cget('font'))
-                w = f.measure(str(lbl.cget('text')))
-                max_widths[i] = max(max_widths[i], w)
-
-            # medir conteúdo: primeiro 50 linhas para eficiência
-            sample = alunos_para_exibir[:50]
-            keys = headers[:-1] # Todas as chaves exceto a de ações
-            for row in sample:
-                for i in range(col_count):
-                    key = keys[i]
-                    text = str(row.get(key, ''))
-                    f = tkfont.Font(size=11)
-                    w = f.measure(text)
-                    if w > max_widths[i]:
-                        max_widths[i] = w
-
-            # aplica minsize com um padding extra
-            for i, w in enumerate(max_widths):
-                min_px = int(w + 24)
-                frame.grid_columnconfigure(i, minsize=min_px)
-        except Exception:
-            pass
+        # A lógica de auto-ajuste de 'minsize' foi removida, pois conflitava
+        # com a configuração de 'weight' e causava a compressão da coluna 'Nome'.
+        # A configuração de 'weight=1' para a coluna 'Nome' e 'weight=0' para as demais
+        # no início desta função é suficiente para o layout desejado.
 
     def _sort_alunos_by(self, key):
         """Define a chave de ordenação e reconstrói a grade de alunos."""
@@ -1442,8 +1454,11 @@ class FilterMenu(ctk.CTkFrame):
         # O master agora é a janela principal da aplicação (App).
         # A altura será definida depois que o conteúdo for criado.
         super().__init__(master, corner_radius=8, border_width=1)
+        # A altura será definida depois. Define uma largura mínima para garantir a legibilidade.
+        super().__init__(master, corner_radius=8, border_width=1, width=200)
 
         # Define a largura do menu para ser igual à da coluna clicada
+        # Impede que os widgets filhos redimensionem o menu (a largura é fixa)
         self.configure(width=button_widget.winfo_width())
         self.pack_propagate(False) # Impede que os widgets filhos redimensionem o menu
 
@@ -1518,16 +1533,18 @@ class FilterMenu(ctk.CTkFrame):
 
         # Checkbox "(Selecionar Tudo)"
         # Se o filtro para esta chave não existir, todos são selecionados por padrão.
-        is_filtered = self.key in self.master_app.alunos_filter_state
-        all_selected = not is_filtered or all(self.check_vars[v].get() for v in values)
-        select_all_var = tk.BooleanVar(value=all_selected)
-        ctk.CTkCheckBox(scroll_frame, text="(Tudo)", variable=select_all_var, 
+        self.select_all_var = tk.BooleanVar(value=False) # Será definido abaixo
+        ctk.CTkCheckBox(scroll_frame, text="(Tudo)", variable=self.select_all_var, 
                         font=ctk.CTkFont(size=11),
-                        command=lambda: self._toggle_all(select_all_var.get())).pack(anchor="w", padx=1)
+                        command=lambda: self._toggle_all(self.select_all_var.get())).pack(anchor="w", padx=1)
 
         for value in values:
-            ctk.CTkCheckBox(scroll_frame, text=value, variable=self.check_vars[value], font=ctk.CTkFont(size=11)).pack(anchor="w", padx=1)
+            ctk.CTkCheckBox(scroll_frame, text=value, variable=self.check_vars[value], 
+                            font=ctk.CTkFont(size=11),
+                            command=self._apply_filters_live).pack(anchor="w", padx=1)
 
+        self._update_select_all_checkbox() # Atualiza o estado inicial do checkbox "Tudo"
+        
         # --- Botões de Ação ---
         action_frame = ctk.CTkFrame(self, fg_color="transparent")
         action_frame.pack(fill="x", padx=inner_padx, pady=(4, 4))
@@ -1548,10 +1565,25 @@ class FilterMenu(ctk.CTkFrame):
         """Seleciona ou deseleciona todos os checkboxes."""
         for var in self.check_vars.values():
             var.set(select_state)
+        self._apply_filters_live()
+
+    def _update_select_all_checkbox(self):
+        """Atualiza o estado do checkbox 'Selecionar Tudo' com base nos outros."""
+        all_selected = all(var.get() for var in self.check_vars.values())
+        self.select_all_var.set(all_selected)
+
+    def _apply_filters_live(self):
+        """Aplica os filtros selecionados sem fechar o menu e atualiza o checkbox 'Tudo'."""
+        self._update_select_all_checkbox()
+        selected_values = {value for value, var in self.check_vars.items() if var.get()}
+        self.callback(self.key, selected_values, sort_direction=None) # Não altera a ordenação
 
     def _clear_filters(self):
         """Limpa o filtro para esta chave e fecha."""
-        self.callback(self.key, None, sort_direction=None) # Passa None para indicar remoção do filtro
+        # Passa um conjunto vazio para limpar o filtro e None para a ordenação,
+        # indicando que a ordenação também deve ser resetada se for desta coluna.
+        # A lógica no callback principal cuidará de remover a chave do estado de ordenação.
+        self.callback(self.key, set(), sort_direction=None)
         self.destroy()
 
     def _apply_and_close(self, sort_direction=None):
@@ -1562,8 +1594,18 @@ class FilterMenu(ctk.CTkFrame):
 
     def _on_click_outside(self, event):
         """Verifica se o clique foi fora do menu e o fecha."""
-        if not (self.winfo_containing(event.x_root, event.y_root) == self):
-            self.destroy()
+        # Identifica o widget que foi clicado nas coordenadas do evento.
+        clicked_widget = self.winfo_containing(event.x_root, event.y_root)
+
+        # Percorre a hierarquia de widgets a partir do widget clicado.
+        # Se o menu (self) for encontrado como um "pai" na hierarquia,
+        # significa que o clique foi dentro do menu.
+        widget = clicked_widget
+        while widget:
+            if widget == self:
+                return # O clique foi interno, então não faz nada.
+            widget = widget.master
+        self.destroy() # Se o loop terminar, o clique foi externo, então fecha o menu.
 
     def destroy(self):
         """Sobrescreve o método destroy para limpar referências."""
