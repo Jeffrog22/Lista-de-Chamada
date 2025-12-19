@@ -11,7 +11,7 @@
     },
     "filter_menu_geometry": {
         "Professor": {
-            "width": 128,
+            "width": 125,
             "x": 908,
             "y": 170
         },
@@ -31,7 +31,7 @@
             "y": 170
         },
         "Idade": {
-            "width": 107,
+            "width": 103,
             "x": 408,
             "y": 170
         },

@@ -285,7 +285,7 @@ class App(ctk.CTk):
         # --- ARMAZENAMENTO DE ESTADO ---
         self.sidebar_is_open = True
         meses = [datetime(2000, i, 1).strftime('%B') for i in range(1, 13)]
-        self.alunos_sort_state = {'key': None, 'reverse': False} # Para ordenação da lista de alunos
+        self.alunos_sort_state = [] # Lista de dicionários para histórico de ordenação: [{'key': 'Nome', 'reverse': False}, ...]
         self.alunos_filter_state = {} # Para filtros por coluna
         self.chamada_data = {} # Guarda os dados da API
         self.chamada_widgets = {} # Guarda os widgets de botão para poder ler o estado
@@ -348,9 +348,9 @@ class App(ctk.CTk):
         else:
             config["column_widths"] = self.column_widths_cache
 
-        # 3. Atualiza a geometria dos menus de filtro no dicionário de config (SEMPRE)
+        # 3. Atualiza a geometria dos menus de filtro no dicionário de config
         # Se houver um menu aberto, salva sua geometria atual no cache antes de escrever no arquivo
-        if self.active_filter_menu and self.active_filter_menu.winfo_exists():
+        if self.alunos_grid_edit_mode.get() and self.active_filter_menu and self.active_filter_menu.winfo_exists():
             if self.active_filter_menu.winfo_height() > 50:
                 self.filter_menu_geometry_cache[self.active_filter_menu.key] = {
                     'width': self.active_filter_menu.winfo_width(),
@@ -707,7 +707,7 @@ class App(ctk.CTk):
 
     def _clear_all_filters_and_sort(self):
         """Reseta o estado de ordenação e todos os filtros, e reconstrói a grade."""
-        self.alunos_sort_state = {'key': None, 'reverse': False}
+        self.alunos_sort_state = []
         self.alunos_filter_state = {}
         # Limpa o texto da busca para garantir que todos os alunos sejam exibidos após a limpeza
         self.alunos_search_entry.delete(0, "end")
@@ -741,7 +741,7 @@ class App(ctk.CTk):
         for key, selected_values in self.alunos_filter_state.items():
             if not selected_values: continue # Se o conjunto de valores estiver vazio, ignora o filtro
             
-            filtered_data = [item for item in filtered_data if item.get(key) in selected_values]
+            filtered_data = [item for item in filtered_data if str(item.get(key) or '') in selected_values]
 
         return filtered_data
 
@@ -755,30 +755,31 @@ class App(ctk.CTk):
             ctk.CTkLabel(self.alunos_scroll_frame, text="Nenhum aluno encontrado.").pack(pady=20)
             return
 
-        # --- Lógica de Ordenação ---
-        sort_key = self.alunos_sort_state.get('key')
-        sort_reverse = self.alunos_sort_state.get('reverse', False)
-
-        # --- Lógica de Ordenação ---
-        if sort_key:
+        # --- Lógica de Ordenação (Stable Sort / Múltiplos Níveis) ---
+        # Itera sobre o histórico de ordenação do mais antigo para o mais recente (pilha).
+        # Como o sort do Python é estável, a última ordenação aplicada prevalece,
+        # mantendo a ordem anterior para itens iguais.
+        if self.alunos_sort_state:
             # Mapeamentos para ordenação customizada
             nivel_order = {
                 'Iniciação B': 0, 'Iniciação A': 1, 'Nível 1': 2, 'Nível 2': 3,
                 'Nível 3': 4, 'Nível 4': 5, 'Adulto B': 6, 'Adulto A': 7
             }
+            # Normaliza chaves para garantir match mesmo com espaços extras
             categoria_order = {
                 'Pré-Mirim': 0, 'Mirim I': 1, 'Mirim II': 2, 'Petiz I': 3, 'Petiz II': 4,
                 'Infantil I': 5, 'Infantil II': 6, 'Juvenil I': 7, 'Juvenil II': 8,
                 'Júnior I': 9, 'Júnior II/Sênior': 10
             }
 
-            def get_sort_value(aluno):
+            def get_sort_value(aluno, sort_key):
                 val = aluno.get(sort_key, '')
                 if val is None: val = ''
 
                 if sort_key == 'Nível':
                     return nivel_order.get(val, 99) # Valores não mapeados vão para o final
                 if sort_key == 'Categoria':
+                    if not isinstance(val, str): return (99, str(val))
                     # Extrai a parte principal da categoria (ex: "Mirim" de "Mirim I")
                     main_cat = val.split(' ')[0]
                     # Usa a ordem do dicionário, com um valor alto para categorias não listadas (A...M)
@@ -791,7 +792,11 @@ class App(ctk.CTk):
                     return val.split('-')[0]
                 return str(val).lower()
 
-            alunos_para_exibir = sorted(alunos_para_exibir, key=get_sort_value, reverse=sort_reverse)
+            # Aplica as ordenações sequencialmente
+            for sort_instruction in self.alunos_sort_state:
+                key = sort_instruction['key']
+                reverse = sort_instruction['reverse']
+                alunos_para_exibir.sort(key=lambda a, k=key: get_sort_value(a, k), reverse=reverse)
 
         # O frame onde os widgets serão colocados é o próprio CTkScrollableFrame.
         frame = self.alunos_scroll_frame
@@ -811,11 +816,16 @@ class App(ctk.CTk):
         def create_header_widget(text, key, col_width):
             """Cria um único CTkButton que se adapta para parecer um Label ou um Botão."""
             display_text = text
-            is_sorted = self.alunos_sort_state.get('key') == key
+            
+            # Verifica se esta coluna está no histórico de ordenação
+            sort_info = next((item for item in self.alunos_sort_state if item['key'] == key), None)
+            is_sorted = sort_info is not None
+            # Verifica se é a ordenação PRINCIPAL (a última da lista)
+            is_primary_sort = self.alunos_sort_state and self.alunos_sort_state[-1]['key'] == key
             is_filtered = key in self.alunos_filter_state and self.alunos_filter_state[key]
 
             if is_sorted:
-                sort_arrow = '▼' if self.alunos_sort_state.get('reverse') else '▲'
+                sort_arrow = '▼' if sort_info['reverse'] else '▲'
                 display_text = f"{text} {sort_arrow}"
             elif is_filtered:
                 display_text += " ▾"
@@ -824,7 +834,7 @@ class App(ctk.CTk):
             if is_sorted or is_filtered:
                 # Botão ativo: com fundo, hover e espaçamento padrão
                 widget = ctk.CTkButton(frame, text=display_text, text_color=("gray10", "gray90"),
-                                     font=ctk.CTkFont(size=12, weight="bold"), corner_radius=4,
+                                     font=ctk.CTkFont(size=12, weight="bold" if is_primary_sort else "normal"), corner_radius=4,
                                      fg_color=("#e0e2e4", "#4a4d50"), hover_color=("#d3d5d7", "#5a5d60"),
                                      width=col_width)
             else:
@@ -887,12 +897,20 @@ class App(ctk.CTk):
 
     def _sort_alunos_by(self, key):
         """Define a chave de ordenação e reconstrói a grade de alunos."""
-        if self.alunos_sort_state.get('key') == key:
-            # Se já está ordenando por esta chave, inverte a direção
-            self.alunos_sort_state['reverse'] = not self.alunos_sort_state.get('reverse', False)
+        # Verifica se a chave já existe no histórico
+        existing_sort = next((item for item in self.alunos_sort_state if item['key'] == key), None)
+
+        if existing_sort:
+            if existing_sort == self.alunos_sort_state[-1]:
+                # Se for a chave principal atual, apenas inverte a direção
+                existing_sort['reverse'] = not existing_sort['reverse']
+            else:
+                # Se já existe mas não é a principal, move para o final (torna principal) mantendo a direção
+                self.alunos_sort_state.remove(existing_sort)
+                self.alunos_sort_state.append(existing_sort)
         else:
-            # Nova chave de ordenação, começa com ascendente
-            self.alunos_sort_state = {'key': key, 'reverse': False}
+            # Se é uma nova chave, adiciona ao final como principal (Ascendente)
+            self.alunos_sort_state.append({'key': key, 'reverse': False})
         
         self.filtrar_alunos_por_nome() # Reconstrói a grade com a nova ordenação
 
@@ -923,10 +941,10 @@ class App(ctk.CTk):
         dados_para_menu = alunos_filtrados_nome
         for filter_key, selected_values in self.alunos_filter_state.items():
             if filter_key != key and selected_values:
-                dados_para_menu = [item for item in dados_para_menu if str(item.get(filter_key, '')) in selected_values]
+                dados_para_menu = [item for item in dados_para_menu if str(item.get(filter_key) or '') in selected_values]
 
         # 3. Coleta os valores únicos da lista resultante
-        unique_values = sorted(list(set(str(aluno.get(key, '')) for aluno in dados_para_menu if aluno.get(key) is not None)))
+        unique_values = sorted(list(set(str(aluno.get(key) or '') for aluno in dados_para_menu)))
 
         # --- CORREÇÃO: Não abre o menu se não houver valores únicos para exibir ---
         # Isso previne a criação de um menu vazio que poderia ter sua geometria inválida salva.
@@ -947,7 +965,16 @@ class App(ctk.CTk):
 
         # Atualiza o estado da ordenação, se aplicável
         if sort_direction is not None:
-            self.alunos_sort_state = {'key': key, 'reverse': sort_direction == 'desc'}
+            # Remove qualquer ordenação anterior dessa chave para reaplicar com a nova direção no topo
+            self.alunos_sort_state = [s for s in self.alunos_sort_state if s['key'] != key]
+            self.alunos_sort_state.append({'key': key, 'reverse': sort_direction == 'desc'})
+        elif sort_direction is None and key in [s['key'] for s in self.alunos_sort_state]:
+            # Se sort_direction for None (ex: limpar filtro), NÃO removemos a ordenação automaticamente
+            # a menos que explicitamente desejado. 
+            # No código original do FilterMenu, limpar filtro passava sort_direction=None.
+            # Se quisermos que "Limpar Filtro" também limpe a ordenação dessa coluna:
+            # self.alunos_sort_state = [s for s in self.alunos_sort_state if s['key'] != key]
+            pass
 
         # Reconstrói o grid
         self.filtrar_alunos_por_nome()
@@ -1581,12 +1608,20 @@ class MenuResizer(ctk.CTkFrame):
         self.bind("<B1-Motion>", self._on_drag)
 
     def _on_press(self, event):
+        # Verifica se o modo de edição está ativo
+        if not self.master_menu.master_app.alunos_grid_edit_mode.get():
+            return
+
         """Captura a posição inicial do mouse e a largura atual do menu."""
         self._start_x = event.x_root
         self._start_width = self.master_menu.winfo_width()
         self._start_menu_x = self.master_menu.winfo_x()
 
     def _on_drag(self, event):
+        # Verifica se o modo de edição está ativo
+        if not self.master_menu.master_app.alunos_grid_edit_mode.get():
+            return
+
         """Calcula a nova largura com base no movimento do mouse e redimensiona o menu."""
         delta_x = event.x_root - self._start_x
         min_width = 20 # Largura mínima para evitar que o menu desapareça
@@ -1777,15 +1812,16 @@ class FilterMenu(ctk.CTkFrame):
 
     def destroy(self):
         """Sobrescreve o método destroy para limpar referências."""
-        # Salva a geometria (sempre)
+        # Salva a geometria (apenas se em modo de edição)
         # --- CORREÇÃO: Adiciona verificação de altura mínima antes de salvar a geometria ---
         # Isso impede que uma geometria inválida (ex: altura 0) seja salva no config.json.
         if self.winfo_exists() and self.winfo_height() > 50:
-            self.master_app.filter_menu_geometry_cache[self.key] = {
-                'width': self.winfo_width(),
-                'x': self.winfo_x(),
-                'y': self.winfo_y()
-            }
+            if self.master_app.alunos_grid_edit_mode.get():
+                self.master_app.filter_menu_geometry_cache[self.key] = {
+                    'width': self.winfo_width(),
+                    'x': self.winfo_x(),
+                    'y': self.winfo_y()
+                }
 
         if self.master_app.active_filter_menu == self:
             self.master_app.active_filter_menu = None
