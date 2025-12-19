@@ -318,34 +318,51 @@ class App(ctk.CTk):
                 config = json.load(f)
                 self.column_widths_cache = config.get("column_widths", {})
 
-                self.filter_menu_geometry_cache = config.get("filter_menu_geometry", {})
+                # --- CORREÇÃO: Validação da geometria do menu ao carregar ---
+                # Ignora geometrias salvas que são inválidas (ex: largura < 50)
+                # Isso impede que um menu "quebrado" seja carregado.
+                loaded_geometries = config.get("filter_menu_geometry", {})
+                self.filter_menu_geometry_cache = {
+                    key: geo for key, geo in loaded_geometries.items()
+                    if geo.get('width', 0) > 50
+                }
         except (FileNotFoundError, json.JSONDecodeError):
             self.column_widths_cache = {} # Se o arquivo não existe ou está corrompido, usa o padrão
             self.filter_menu_geometry_cache = {}
 
     def _save_config(self):
         """Salva as configurações atuais do app em um arquivo JSON."""
-        # Só salva se o modo de edição estiver habilitado, para evitar salvar em estado "fixo"
-        if self.alunos_grid_edit_mode.get():
-            # 1. Carrega a configuração existente para não sobrescrever dados não relacionados.
-            try:
-                with open("config.json", "r") as f:
-                    config = json.load(f)
-            except (FileNotFoundError, json.JSONDecodeError):
-                config = {}
+        # 1. Carrega a configuração existente para não sobrescrever dados não relacionados.
+        try:
+            with open("config.json", "r") as f:
+                config = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            config = {}
 
-            # 2. Atualiza a largura das colunas da aba Alunos no dicionário de config
-            if self.alunos_scroll_frame.winfo_exists():
-                headers = ['Nome', 'Nível', 'Idade', 'Categoria', 'Turma', 'Horário', 'Professor', '']
-                current_widths = {headers[i]: self.alunos_scroll_frame.grid_columnconfigure(i)['minsize'] for i in range(len(headers))}
-                config["column_widths"] = current_widths
+        # 2. Atualiza a largura das colunas da aba Alunos (apenas se em modo de edição para segurança)
+        if self.alunos_grid_edit_mode.get() and self.alunos_scroll_frame.winfo_exists():
+            headers = ['Nome', 'Nível', 'Idade', 'Categoria', 'Turma', 'Horário', 'Professor', '']
+            current_widths = {headers[i]: self.alunos_scroll_frame.grid_columnconfigure(i)['minsize'] for i in range(len(headers))}
+            config["column_widths"] = current_widths
+            self.column_widths_cache = current_widths
+        else:
+            config["column_widths"] = self.column_widths_cache
 
-            # 3. Atualiza a geometria dos menus de filtro no dicionário de config
-            config["filter_menu_geometry"] = self.filter_menu_geometry_cache
+        # 3. Atualiza a geometria dos menus de filtro no dicionário de config (SEMPRE)
+        # Se houver um menu aberto, salva sua geometria atual no cache antes de escrever no arquivo
+        if self.active_filter_menu and self.active_filter_menu.winfo_exists():
+            if self.active_filter_menu.winfo_height() > 50:
+                self.filter_menu_geometry_cache[self.active_filter_menu.key] = {
+                    'width': self.active_filter_menu.winfo_width(),
+                    'x': self.active_filter_menu.winfo_x(),
+                    'y': self.active_filter_menu.winfo_y()
+                }
 
-            # 4. Salva o dicionário de configuração completo no arquivo
-            with open("config.json", "w", encoding='utf-8') as f:
-                json.dump(config, f, indent=4)
+        config["filter_menu_geometry"] = self.filter_menu_geometry_cache
+
+        # 4. Salva o dicionário de configuração completo no arquivo
+        with open("config.json", "w", encoding='utf-8') as f:
+            json.dump(config, f, indent=4)
 
     def _on_app_close(self):
         """Executa ações de salvamento antes de fechar o app."""
@@ -791,37 +808,33 @@ class App(ctk.CTk):
             # Define a configuração para cada coluna sequencial (0, 1, 2, ...)
             frame.grid_columnconfigure(i, weight=weight, minsize=width)
 
-        def create_header_widget(text, key):
-            """
-            Cria um Label para o cabeçalho. Se o cabeçalho estiver ativo (ordenado/filtrado),
-            cria um Botão para indicar visualmente. Isso permite que colunas inativas
-            sejam muito mais estreitas, pois Labels têm menos largura intrínseca.
-            """
+        def create_header_widget(text, key, col_width):
+            """Cria um único CTkButton que se adapta para parecer um Label ou um Botão."""
             display_text = text
-            is_active = self.alunos_sort_state.get('key') == key or (key in self.alunos_filter_state and self.alunos_filter_state[key])
+            is_sorted = self.alunos_sort_state.get('key') == key
+            is_filtered = key in self.alunos_filter_state and self.alunos_filter_state[key]
 
-            if self.alunos_sort_state.get('key') == key:
+            if is_sorted:
                 sort_arrow = '▼' if self.alunos_sort_state.get('reverse') else '▲'
                 display_text = f"{text} {sort_arrow}"
-            elif key in self.alunos_filter_state and self.alunos_filter_state[key]:
-                display_text += " ▾" # Um ícone simples para indicar filtro
+            elif is_filtered:
+                display_text += " ▾"
 
-            # Se estiver ativo, usa um botão para dar feedback visual. Senão, um label.
-            if is_active:
-                widget = ctk.CTkButton(frame, text=display_text,
+            # A solução é definir os parâmetros na criação, não no .configure()
+            if is_sorted or is_filtered:
+                # Botão ativo: com fundo, hover e espaçamento padrão
+                widget = ctk.CTkButton(frame, text=display_text, text_color=("gray10", "gray90"),
+                                     font=ctk.CTkFont(size=12, weight="bold"), corner_radius=4,
                                      fg_color=("#e0e2e4", "#4a4d50"), hover_color=("#d3d5d7", "#5a5d60"),
-                                     text_color=("gray10", "gray90"), font=ctk.CTkFont(size=12, weight="bold"))
+                                     width=col_width)
             else:
-                widget = ctk.CTkLabel(frame, text=display_text,
-                                    font=ctk.CTkFont(size=12, weight="bold"),
-                                    text_color=("gray10", "gray90"))
-                # Adiciona um bind para que o label se comporte como um botão ao clicar
-                widget.bind("<Button-1>", lambda e, k=key, w=widget: self._open_filter_menu(k, w))
+                # Botão inativo: imita um Label, sem fundo, sem hover e sem espaçamento horizontal
+                widget = ctk.CTkButton(frame, text=display_text, text_color=("gray10", "gray90"),
+                                     font=ctk.CTkFont(size=12, weight="bold"), corner_radius=4,
+                                     fg_color="transparent", hover=False, text_color_disabled="red",
+                                     width=0) # O 'width=0' é a chave para remover o padding
 
-            # O comando para abrir o menu é configurado separadamente para o botão
-            if isinstance(widget, ctk.CTkButton):
-                widget.configure(command=lambda k=key, w=widget: self._open_filter_menu(k, w))
-
+            widget.configure(command=lambda k=key, w=widget: self._open_filter_menu(k, w))
             return widget
 
         for i, header_text in enumerate(headers):
@@ -830,9 +843,8 @@ class App(ctk.CTk):
                 continue
 
             key = header_text
-            header_widget = create_header_widget(header_text, key)
-            # Usa sticky="ns" para centralizar verticalmente e permitir que o resizer ocupe o espaço horizontal.
-            header_widget.grid(row=0, column=i, padx=0, pady=4, sticky='ns')
+            header_widget = create_header_widget(header_text, key, width)
+            header_widget.grid(row=0, column=i, padx=0, pady=4, sticky='ew')
 
             # Adiciona um redimensionador após cada cabeçalho, exceto o último
             if i < len(headers) - 1:
@@ -902,8 +914,25 @@ class App(ctk.CTk):
     def _create_filter_menu_safely(self, key, button_widget):
         if not self.all_students_data or self.active_filter_menu: return
 
-        # Coleta valores únicos da coluna
-        unique_values = sorted(list(set(str(aluno.get(key, '')) for aluno in self.all_students_data if aluno.get(key) or str(aluno.get(key, '')) == '0')))
+        # --- CORREÇÃO: Coleta valores únicos da lista *atualmente filtrada*, não da lista completa ---
+        # 1. Pega o filtro de busca por nome
+        query = self.alunos_search_entry.get().lower()
+        alunos_filtrados_nome = [aluno for aluno in self.all_students_data if query in aluno.get('Nome', '').lower()] if query else self.all_students_data
+
+        # 2. Aplica os outros filtros de coluna, *exceto* o da coluna que estamos abrindo o menu
+        dados_para_menu = alunos_filtrados_nome
+        for filter_key, selected_values in self.alunos_filter_state.items():
+            if filter_key != key and selected_values:
+                dados_para_menu = [item for item in dados_para_menu if str(item.get(filter_key, '')) in selected_values]
+
+        # 3. Coleta os valores únicos da lista resultante
+        unique_values = sorted(list(set(str(aluno.get(key, '')) for aluno in dados_para_menu if aluno.get(key) is not None)))
+
+        # --- CORREÇÃO: Não abre o menu se não houver valores únicos para exibir ---
+        # Isso previne a criação de um menu vazio que poderia ter sua geometria inválida salva.
+        if not unique_values:
+            messagebox.showinfo("Filtro", f"Não há valores disponíveis para filtrar na coluna '{key}' com a seleção atual.", parent=self)
+            return
 
         # Cria e exibe o menu
         self.active_filter_menu = FilterMenu(self, key, unique_values, button_widget, self._apply_filter_and_sort)
@@ -1559,10 +1588,6 @@ class MenuResizer(ctk.CTkFrame):
 
     def _on_drag(self, event):
         """Calcula a nova largura com base no movimento do mouse e redimensiona o menu."""
-        # Verifica se o modo de edição está ativo na aplicação principal
-        if not self.master_menu.master_app.alunos_grid_edit_mode.get():
-            return
-
         delta_x = event.x_root - self._start_x
         min_width = 20 # Largura mínima para evitar que o menu desapareça
 
@@ -1694,13 +1719,12 @@ class FilterMenu(ctk.CTkFrame):
         self.place(x=x, y=y)
         self.lift()
 
-        # Adiciona os "puxadores" de redimensionamento apenas se o modo de edição estiver ativo
-        if self.master_app.alunos_grid_edit_mode.get():
-            right_resizer = MenuResizer(self, side="right")
-            right_resizer.place(relx=1.0, rely=0, relheight=1.0, anchor="ne")
+        # Adiciona os "puxadores" de redimensionamento (sempre ativos)
+        right_resizer = MenuResizer(self, side="right")
+        right_resizer.place(relx=1.0, rely=0, relheight=1.0, anchor="ne")
 
-            left_resizer = MenuResizer(self, side="left")
-            left_resizer.place(relx=0.0, rely=0, relheight=1.0, anchor="nw")
+        left_resizer = MenuResizer(self, side="left")
+        left_resizer.place(relx=0.0, rely=0, relheight=1.0, anchor="nw")
 
         # Fecha o menu se o usuário clicar fora dele
         self.master_app.bind("<Button-1>", self._on_click_outside, add="+")
@@ -1753,14 +1777,15 @@ class FilterMenu(ctk.CTkFrame):
 
     def destroy(self):
         """Sobrescreve o método destroy para limpar referências."""
-        # Salva a geometria apenas se o modo de edição estiver ativo
-        if self.master_app.alunos_grid_edit_mode.get():
-            if self.winfo_exists(): # Garante que a janela ainda existe ao obter a geometria
-                self.master_app.filter_menu_geometry_cache[self.key] = {
-                    'width': self.winfo_width(),
-                    'x': self.winfo_x(),
-                    'y': self.winfo_y()
-                }
+        # Salva a geometria (sempre)
+        # --- CORREÇÃO: Adiciona verificação de altura mínima antes de salvar a geometria ---
+        # Isso impede que uma geometria inválida (ex: altura 0) seja salva no config.json.
+        if self.winfo_exists() and self.winfo_height() > 50:
+            self.master_app.filter_menu_geometry_cache[self.key] = {
+                'width': self.winfo_width(),
+                'x': self.winfo_x(),
+                'y': self.winfo_y()
+            }
 
         if self.master_app.active_filter_menu == self:
             self.master_app.active_filter_menu = None
