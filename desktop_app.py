@@ -6,6 +6,7 @@ from tkinter import font as tkfont
 import requests
 import threading
 from datetime import datetime
+from urllib.parse import quote
 
 # --- CONFIGURAÇÕES GLOBAIS ---
 API_BASE_URL = "http://127.0.0.1:8000"
@@ -309,6 +310,7 @@ class App(ctk.CTk):
         self.carregar_filtros_iniciais()
         self._load_config() # Carrega as configurações salvas
         self.run_in_thread(self.carregar_lista_turmas) # Carrega dados de turmas em background para o form
+        self.run_in_thread(self.carregar_categorias) # Carrega categorias em background na inicialização
         self.show_main_menu() # Garante que o menu principal seja exibido no início
 
     def _load_config(self):
@@ -621,8 +623,20 @@ class App(ctk.CTk):
                 resp_cats = requests.get(f"{API_BASE_URL}/api/categorias")
                 resp_cats.raise_for_status()
                 categorias_list = resp_cats.json() or []
+                self.categorias_data = categorias_list # Atualiza o cache global da App
             except requests.exceptions.RequestException:
                 categorias_list = []
+
+            # Carrega turmas (se não estiver em cache) para definir o Nível corretamente
+            turmas_list = self.turmas_data
+            if not turmas_list:
+                try:
+                    resp_turmas = requests.get(f"{API_BASE_URL}/api/all-turmas")
+                    resp_turmas.raise_for_status()
+                    turmas_list = resp_turmas.json()
+                    self.turmas_data = turmas_list
+                except:
+                    turmas_list = []
 
             def definir_categoria_por_idade_local(idade_val):
                 if idade_val is None or not categorias_list:
@@ -639,7 +653,7 @@ class App(ctk.CTk):
             # Processa cada aluno para adicionar idade e categoria
             for idx, aluno in enumerate(alunos):
                 # Normaliza os dados do aluno para consistência interna
-                aluno_normalizado = self._normalizar_dados_aluno(aluno, categorias_list)
+                aluno_normalizado = self._normalizar_dados_aluno(aluno, categorias_list, turmas_list)
                 alunos[idx] = aluno_normalizado
 
             self.all_students_data = alunos # Armazena a lista processada e normalizada no cache
@@ -654,17 +668,25 @@ class App(ctk.CTk):
             # Passa a exceção 'e' para a função de atualização da UI
             self.after(0, self._update_ui_error, e)
 
-    def _normalizar_dados_aluno(self, aluno_data, categorias_list):
+    def _normalizar_dados_aluno(self, aluno_data, categorias_list, turmas_list=None):
         """
         Centraliza a lógica de limpeza e padronização dos dados de um aluno.
         Garante que chaves conflitantes (ex: 'Aniversario' vs 'Data de Nascimento') sejam unificadas.
+        Recalcula campos derivados (Idade, Categoria, Nível) para garantir consistência.
         """
         # 1. Unifica a data de nascimento
-        data_nasc_val = aluno_data.get('Aniversario') or aluno_data.get('Aniversário') or aluno_data.get('Data de Nascimento')
-        aluno_data['Aniversario'] = data_nasc_val
+        keys_nasc = ['Aniversario', 'Aniversário', 'Data de Nascimento', 'data_nascimento', 'nascimento']
+        data_nasc_val = next((aluno_data.get(k) for k in keys_nasc if aluno_data.get(k)), None)
 
         # 2. Unifica o telefone/whatsapp
-        telefone_val = aluno_data.get('Whatsapp') or aluno_data.get('Telefone')
+        keys_tel = ['Whatsapp', 'whatsapp', 'Telefone', 'telefone', 'Celular', 'celular']
+        telefone_val = next((aluno_data.get(k) for k in keys_tel if aluno_data.get(k)), None)
+
+        # Limpa chaves duplicadas do dicionário para evitar confusão
+        for k in keys_nasc + keys_tel:
+            aluno_data.pop(k, None)
+
+        aluno_data['Aniversario'] = data_nasc_val
         aluno_data['Whatsapp'] = telefone_val
 
         # 3. Calcula e adiciona Idade
@@ -684,9 +706,26 @@ class App(ctk.CTk):
 
         aluno_data['Categoria'] = definir_categoria(idade)
 
-        # Remove chaves antigas/conflitantes para evitar ambiguidade
-        aluno_data.pop('Data de Nascimento', None)
-        aluno_data.pop('Telefone', None)
+        # 5. Define e adiciona Nível (Recuperação baseada na Turma)
+        # Se o backend não salvou o Nível, redescobrimos pela Turma/Horário/Prof
+        if turmas_list:
+            turma_aluno = aluno_data.get('Turma')
+            horario_aluno = aluno_data.get('Horário')
+            prof_aluno = aluno_data.get('Professor')
+            
+            nivel_encontrado = '-'
+            for t in turmas_list:
+                if (t.get('Turma') == turma_aluno and 
+                    t.get('Horário') == horario_aluno and 
+                    t.get('Professor') == prof_aluno):
+                    nivel_encontrado = t.get('Nível')
+                    break
+            aluno_data['Nível'] = nivel_encontrado
+
+        # 6. Garante campos estáticos com valor padrão
+        aluno_data.setdefault('Gênero', '')
+        aluno_data.setdefault('ParQ', 'Não')
+
         return aluno_data
             
     def filtrar_alunos_por_nome(self, event=None):
@@ -1345,19 +1384,20 @@ class AddStudentToplevel(ctk.CTkToplevel):
         if not self.edit_data:
             return
 
-        self.widgets['nome'].insert(0, self.edit_data.get('Nome', ''))
-        self.widgets['genero'].set(self.edit_data.get('Gênero', ''))
+        self.widgets['nome'].insert(0, self.edit_data.get('Nome') or '')
+        self.widgets['genero'].set(self.edit_data.get('Gênero') or '')
 
         # Formata a data de nascimento para dd/mm/YYYY
         data_nasc_str = self.edit_data.get('Aniversario') # Já foi normalizado
         if data_nasc_str:
             self.widgets['data_nasc'].insert(0, self.master_app._formatar_data_para_exibicao(str(data_nasc_str)))
 
-        self.widgets['telefone'].insert(0, self.edit_data.get('Whatsapp', '')) # Já foi normalizado
-        self.widgets['turma'].set(self.edit_data.get('Turma', ''))
-        self.widgets['horario'].set(self.edit_data.get('Horário', ''))
-        self.widgets['prof_var'].set(self.edit_data.get('Professor', ''))
-        self.widgets['parq_var'].set(self.edit_data.get('ParQ', 'Sim'))
+        tel = self.edit_data.get('Whatsapp') or ''
+        self.widgets['telefone'].insert(0, tel)
+        self.widgets['turma'].set(self.edit_data.get('Turma') or '')
+        self.widgets['horario'].set(self.edit_data.get('Horário') or '')
+        self.widgets['prof_var'].set(self.edit_data.get('Professor') or '')
+        self.widgets['parq_var'].set(self.edit_data.get('ParQ') or 'Sim')
 
     def _set_enter_navigation(self):
         """Configura a tecla Enter para pular para o próximo widget."""
@@ -1390,6 +1430,7 @@ class AddStudentToplevel(ctk.CTkToplevel):
             "Aniversario": self.widgets['data_nasc'].get(),
             "Gênero": self.widgets['genero'].get(),
             "Whatsapp": self.widgets['telefone'].get(), # Envia como 'Whatsapp' para consistência
+            "Telefone": self.widgets['telefone'].get(), # Envia também como 'Telefone' para garantir compatibilidade com backend/Excel
             "Turma": self.widgets['turma'].get(),
             "Horário": self.widgets['horario'].get(),
             "Professor": self.widgets['prof_var'].get(),
@@ -1407,11 +1448,18 @@ class AddStudentToplevel(ctk.CTkToplevel):
         try:
             if self.is_edit_mode:
                 # Endpoint para ATUALIZAR um aluno existente
-                aluno_id = self.edit_data.get('id') # Supondo que a API retorna um 'id'
-                if not aluno_id:
-                    messagebox.showerror("Erro", "ID do aluno não encontrado. Não é possível salvar.", parent=self)
+                # Identifica o aluno pelo Nome original (e Aniversário), conforme solicitado
+                # Identifica o aluno pelo Nome original, codificando para URL (ex: Zé do Pé -> Z%C3%A9%20do%20P%C3%A9)
+                original_name = self.edit_data.get('Nome')
+                original_dob = self.edit_data.get('Aniversario')
+
+                if not original_name:
+                    messagebox.showerror("Erro", "Nome original não encontrado. Não é possível identificar o aluno para edição.", parent=self)
                     return
-                response = requests.put(f"{API_BASE_URL}/api/aluno/{aluno_id}", json=data)
+
+                # Usa quote para garantir que espaços e acentos no nome não quebrem a URL
+                encoded_name = quote(original_name)
+                response = requests.put(f"{API_BASE_URL}/api/aluno/{encoded_name}", json=data)
                 success_message = f"Dados de '{data['Nome']}' salvos com sucesso!"
             else:
                 # Endpoint para CRIAR um novo aluno
@@ -1434,10 +1482,23 @@ class AddStudentToplevel(ctk.CTkToplevel):
             
         except requests.exceptions.RequestException as e:
             action = "salvar as alterações" if self.is_edit_mode else "adicionar o aluno"
-            error_msg = f"Não foi possível {action}.\n\nErro: {e}"
+            error_msg = f"Não foi possível {action}."
+
+            if e.response is not None:
+                if e.response.status_code == 404:
+                    url_tentada = e.response.request.url if e.response.request else "URL desconhecida"
+                    error_msg += f"\n\nErro 404 (Não Encontrado):\nO servidor não encontrou o caminho:\n{url_tentada}\n\nProvável causa: O aluno não foi encontrado com o Nome/Aniversário fornecidos."
+                    error_msg += f"\n\nErro 404 (Não Encontrado):\nO servidor não encontrou o aluno na URL:\n{url_tentada}\n\nVerifique se o nome do aluno no banco é exatamente '{self.edit_data.get('Nome')}'."
+                else:
+                    error_msg += f"\nStatus Code: {e.response.status_code}"
+            
+            error_msg += f"\n\nErro técnico: {e}"
+
             try:
-                error_detail = e.response.json().get('detail', 'Erro desconhecido do servidor.')
-                error_msg += f"\nDetalhe: {error_detail}"
+                if e.response is not None:
+                    error_detail = e.response.json().get('detail', '')
+                    if error_detail:
+                        error_msg += f"\nDetalhe do Servidor: {error_detail}"
             except:
                 pass
             messagebox.showerror("Erro de API", error_msg, parent=self)
@@ -1524,7 +1585,7 @@ class AddStudentToplevel(ctk.CTkToplevel):
 
     def _definir_categoria(self, idade):
         """Define a categoria do aluno com base na idade e nos dados de categoria em cache."""
-        categorias_data = self.categorias_data
+        categorias_data = self.master_app.categorias_data # Usa sempre o cache mais atualizado da App
         if idade is None or not categorias_data:
             return 'Não Categorizado'
         

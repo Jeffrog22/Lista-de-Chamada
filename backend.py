@@ -6,6 +6,7 @@ import calendar
 from pydantic import BaseModel
 from typing import List, Dict, Tuple
 import time, os
+from urllib.parse import unquote
 
 # --- INICIALIZAÇÃO DO APP FASTAPI ---
 app = FastAPI(
@@ -416,6 +417,62 @@ def adicionar_aluno(aluno_data: AlunoPayload):
         raise # Re-levanta exceções HTTP (como o 409) para que o FastAPI as manipule
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro interno ao adicionar aluno: {e}")
+
+# --- NOVO ENDPOINT PARA ATUALIZAR ALUNO ---
+@app.put("/api/aluno/{nome_original}")
+def atualizar_aluno(nome_original: str, aluno_data: AlunoPayload):
+    """Atualiza os dados de um aluno existente."""
+    try:
+        # Decodifica o nome da URL (ex: Jos%C3%A9 -> José)
+        nome_real = unquote(nome_original)
+
+        # Obtém dados do cache
+        df_alunos_cache, df_turmas, df_registros_cache, df_categorias = get_dados_cached()
+        
+        # Trabalha com cópias para não afetar o cache antes de salvar com sucesso
+        df_alunos = df_alunos_cache.copy()
+        df_registros = df_registros_cache.copy()
+
+        # Verifica se o aluno existe
+        if nome_real not in df_alunos['Nome'].values:
+            raise HTTPException(status_code=404, detail=f"Aluno '{nome_real}' não encontrado.")
+
+        # Verifica conflito de nome (se o nome foi alterado e o novo já existe)
+        if aluno_data.Nome != nome_real and aluno_data.Nome in df_alunos['Nome'].values:
+            raise HTTPException(status_code=409, detail=f"O nome '{aluno_data.Nome}' já está em uso por outro aluno.")
+
+        # Prepara os dados (mapeia campos do payload para colunas do Excel)
+        dados_atualizados = aluno_data.dict()
+        dados_atualizados['Data de Nascimento'] = dados_atualizados.pop('Aniversario')
+        if 'Telefone' in dados_atualizados:
+            dados_atualizados['Whatsapp'] = dados_atualizados.pop('Telefone')
+
+        # Atualiza os dados no DataFrame de Alunos
+        idx = df_alunos[df_alunos['Nome'] == nome_real].index[0]
+        for col, valor in dados_atualizados.items():
+            df_alunos.loc[idx, col] = valor
+
+        # Se o nome mudou, atualiza também na planilha de Registros para não perder o histórico
+        if aluno_data.Nome != nome_real:
+            if 'Nome' in df_registros.columns:
+                df_registros.loc[df_registros['Nome'] == nome_real, 'Nome'] = aluno_data.Nome
+
+        # Salva todas as alterações no arquivo Excel
+        with pd.ExcelWriter(NOME_ARQUIVO, engine='openpyxl') as writer:
+            df_alunos.to_excel(writer, sheet_name='Alunos', index=False)
+            df_turmas.to_excel(writer, sheet_name='Turmas', index=False)
+            df_categorias.to_excel(writer, sheet_name='Categorias', index=False)
+            df_registros.to_excel(writer, sheet_name='Registros', index=False)
+
+        # Invalida o cache para forçar recarregamento
+        _cache["timestamp"] = 0
+        
+        return {"status": "Aluno atualizado com sucesso!", "aluno": aluno_data.dict()}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro interno ao atualizar aluno: {e}")
 
 # Para rodar este servidor, use o comando no terminal:
 # uvicorn backend:app --reload
