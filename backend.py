@@ -126,6 +126,13 @@ class AlunoPayload(BaseModel):
     Nível: str = ""
     Categoria: str = ""
 
+class TurmaNivelPayload(BaseModel):
+    """Define a estrutura para atualizar o nível de uma turma."""
+    turma: str
+    horario: str
+    professor: str
+    novo_nivel: str
+
 # --- ENDPOINTS DA API ---
 
 @app.get("/")
@@ -189,6 +196,15 @@ def get_all_turmas():
 
     # Usa o horário formatado para a resposta e remove colunas auxiliares
     df_turmas_com_qtd = df_turmas_com_qtd.rename(columns={"Horario_Formatado": "Horário"}).drop(columns=['Horário_x', 'Horário_y'], errors='ignore')
+    
+    # Reordena as colunas: move 'qtd.', 'Atalho' e 'Data de Início' para o final
+    cols = df_turmas_com_qtd.columns.tolist()
+    cols_final = ['qtd.', 'Atalho']
+    
+    # Reconstrói a lista: colunas normais + colunas finais (se existirem)
+    new_order = [c for c in cols if c not in cols_final] + [c for c in cols_final if c in cols]
+    df_turmas_com_qtd = df_turmas_com_qtd[new_order]
+
     return df_turmas_com_qtd.to_dict(orient='records')
 
 @app.get("/api/categorias")
@@ -473,6 +489,95 @@ def atualizar_aluno(nome_original: str, aluno_data: AlunoPayload):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro interno ao atualizar aluno: {e}")
+
+# --- NOVO ENDPOINT PARA EXCLUIR TURMA ---
+@app.delete("/api/turma")
+def excluir_turma(
+    turma: str = Query(...),
+    horario: str = Query(...),
+    professor: str = Query(...)
+):
+    """Exclui uma turma da planilha 'Turmas'."""
+    try:
+        df_alunos, df_turmas, df_registros, df_categorias = get_dados_cached()
+        
+        # Cria uma cópia para manipulação e formata o horário para localizar a linha correta
+        df_turmas_temp = df_turmas.copy()
+        df_turmas_temp['Horario_Formatado'] = df_turmas_temp['Horário'].apply(formatar_horario)
+        
+        # Localiza a turma pelos critérios (Turma, Horário Formatado, Professor)
+        mask = (
+            (df_turmas_temp['Turma'] == turma) & 
+            (df_turmas_temp['Horario_Formatado'] == horario) & 
+            (df_turmas_temp['Professor'] == professor)
+        )
+        
+        if not mask.any():
+            raise HTTPException(status_code=404, detail="Turma não encontrada para exclusão.")
+            
+        # Remove as linhas encontradas do DataFrame original
+        indices_to_drop = df_turmas_temp[mask].index
+        df_turmas = df_turmas.drop(indices_to_drop)
+        
+        # Salva as alterações no Excel
+        with pd.ExcelWriter(NOME_ARQUIVO, engine='openpyxl') as writer:
+            df_alunos.to_excel(writer, sheet_name='Alunos', index=False)
+            df_turmas.to_excel(writer, sheet_name='Turmas', index=False)
+            df_categorias.to_excel(writer, sheet_name='Categorias', index=False)
+            df_registros.to_excel(writer, sheet_name='Registros', index=False)
+            
+        # Invalida o cache
+        _cache["timestamp"] = 0
+        
+        return {"status": "Turma excluída com sucesso"}
+        
+    except HTTPException:
+        raise
+    except PermissionError:
+        raise HTTPException(status_code=500, detail=f"Erro de permissão. O arquivo '{NOME_ARQUIVO}' pode estar aberto.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao excluir turma: {e}")
+
+# --- NOVO ENDPOINT PARA ATUALIZAR NÍVEL DA TURMA ---
+@app.put("/api/turma/nivel")
+def atualizar_nivel_turma(payload: TurmaNivelPayload):
+    """Atualiza o nível de uma turma existente."""
+    try:
+        df_alunos, df_turmas, df_registros, df_categorias = get_dados_cached()
+        
+        # Cria cópia para manipulação segura e busca
+        df_turmas_temp = df_turmas.copy()
+        df_turmas_temp['Horario_Formatado'] = df_turmas_temp['Horário'].apply(formatar_horario)
+        
+        # Localiza a turma
+        mask = (
+            (df_turmas_temp['Turma'] == payload.turma) & 
+            (df_turmas_temp['Horario_Formatado'] == payload.horario) & 
+            (df_turmas_temp['Professor'] == payload.professor)
+        )
+        
+        indices = df_turmas_temp[mask].index
+        if indices.empty:
+            raise HTTPException(status_code=404, detail="Turma não encontrada para atualização.")
+            
+        # Atualiza o nível no DataFrame original (usando os índices encontrados)
+        # Usamos uma cópia para garantir que a escrita no Excel seja limpa
+        df_turmas_to_save = df_turmas.copy()
+        df_turmas_to_save.loc[indices, 'Nível'] = payload.novo_nivel
+        
+        with pd.ExcelWriter(NOME_ARQUIVO, engine='openpyxl') as writer:
+            df_alunos.to_excel(writer, sheet_name='Alunos', index=False)
+            df_turmas_to_save.to_excel(writer, sheet_name='Turmas', index=False)
+            df_categorias.to_excel(writer, sheet_name='Categorias', index=False)
+            df_registros.to_excel(writer, sheet_name='Registros', index=False)
+            
+        _cache["timestamp"] = 0 # Invalida cache
+        return {"status": "Nível atualizado com sucesso"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao atualizar nível: {e}")
 
 # Para rodar este servidor, use o comando no terminal:
 # uvicorn backend:app --reload

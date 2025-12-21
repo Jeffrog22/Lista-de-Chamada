@@ -1057,12 +1057,14 @@ class App(ctk.CTk):
             turmas = response.json()
             self.turmas_data = turmas # Armazena em cache para o formulário de add aluno
 
-            headers = ["Nível", "Turma", "Horário", "Professor", "Data de Início", "Qtd.", "Atalho"]
+            headers = ["Nível", "Turma", "Horário", "Professor", "Qtd.", "Atalho", "Excluir"]
             self.turmas_scroll_frame.grid_columnconfigure(0, weight=1)
             self.turmas_scroll_frame.grid_columnconfigure(1, weight=1)
             self.turmas_scroll_frame.grid_columnconfigure(2, weight=1)
             self.turmas_scroll_frame.grid_columnconfigure(3, weight=1)
-            self.turmas_scroll_frame.grid_columnconfigure(4, weight=1)
+            self.turmas_scroll_frame.grid_columnconfigure(4, weight=0) # Qtd (menor)
+            self.turmas_scroll_frame.grid_columnconfigure(5, weight=0) # Atalho (menor)
+            self.turmas_scroll_frame.grid_columnconfigure(6, weight=0) # Excluir (botão)
 
             for i, header in enumerate(headers):
                 # Centraliza o cabeçalho da quantidade
@@ -1070,17 +1072,26 @@ class App(ctk.CTk):
                 ctk.CTkLabel(self.turmas_scroll_frame, text=header, font=ctk.CTkFont(weight="bold"), anchor=anchor).grid(row=0, column=i, padx=5, pady=5, sticky="ew")
 
             for row_idx, turma in enumerate(turmas, start=1):
-                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Nível", ""), anchor="w").grid(row=row_idx, column=0, padx=5, pady=5, sticky="ew")
+                # Label do Nível com suporte a edição (Duplo Clique)
+                nivel_label = ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Nível", ""), anchor="w")
+                nivel_label.grid(row=row_idx, column=0, padx=5, pady=5, sticky="ew")
+                # Bind do evento de duplo clique esquerdo
+                nivel_label.bind("<Double-Button-1>", lambda e, t=turma, l=nivel_label: self._iniciar_edicao_nivel(t, l))
+
                 ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Turma", ""), anchor="w").grid(row=row_idx, column=1, padx=5, pady=5, sticky="ew")
                 ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Horário", ""), anchor="w").grid(row=row_idx, column=2, padx=5, pady=5, sticky="ew")
                 ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Professor", ""), anchor="w").grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
-                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Data de Início", ""), anchor="w").grid(row=row_idx, column=4, padx=5, pady=5, sticky="ew")
-                ctk.CTkLabel(self.turmas_scroll_frame, text=str(turma.get("qtd.", 0)), anchor="center").grid(row=row_idx, column=5, padx=5, pady=5, sticky="ew")
+                ctk.CTkLabel(self.turmas_scroll_frame, text=str(turma.get("qtd.", 0)), anchor="center").grid(row=row_idx, column=4, padx=5, pady=5, sticky="ew")
                 
                 # Botão de atalho com ícone
                 atalho_btn = ctk.CTkButton(self.turmas_scroll_frame, text="»", width=40, font=ctk.CTkFont(size=16, weight="bold"))
                 atalho_btn.configure(command=lambda t=turma: self.usar_atalho_turma(t))
-                atalho_btn.grid(row=row_idx, column=6, padx=5, pady=5)
+                atalho_btn.grid(row=row_idx, column=5, padx=5, pady=5)
+
+                # Botão de Excluir (Lixeira)
+                btn_excluir = ctk.CTkButton(self.turmas_scroll_frame, text="🗑️", width=40, fg_color="#E74C3C", hover_color="#c0392b", font=ctk.CTkFont(size=16))
+                btn_excluir.configure(command=lambda t=turma: self.confirmar_exclusao_turma(t))
+                btn_excluir.grid(row=row_idx, column=6, padx=5, pady=5)
 
         except requests.exceptions.RequestException as e:
             ctk.CTkLabel(self.turmas_scroll_frame, text=f"Erro ao carregar turmas: {e}").pack()
@@ -1101,6 +1112,85 @@ class App(ctk.CTk):
 
         # 3. Iniciar a busca de alunos automaticamente
         self.iniciar_busca_alunos()
+
+    def confirmar_exclusao_turma(self, turma_info):
+        """Exibe aviso de atenção e confirma a exclusão da turma."""
+        msg = (
+            "ATENÇÃO: Tem certeza que deseja excluir esta turma?\n\n"
+            "É IMPORTANTE transferir os alunos desta turma antes de realizar esta ação, "
+            "pois eles ficarão sem turma vinculada.\n\n"
+            "Deseja continuar com a exclusão?"
+        )
+        if messagebox.askyesno("Confirmar Exclusão", msg, icon='warning'):
+            self.excluir_turma(turma_info)
+
+    def excluir_turma(self, turma_info):
+        """Chama a API para excluir a turma."""
+        try:
+            params = {
+                "turma": turma_info["Turma"],
+                "horario": turma_info["Horário"],
+                "professor": turma_info["Professor"]
+            }
+            response = requests.delete(f"{API_BASE_URL}/api/turma", params=params)
+            response.raise_for_status()
+            messagebox.showinfo("Sucesso", "Turma excluída com sucesso!")
+            self.carregar_lista_turmas() # Recarrega a lista para remover o item excluído
+        except requests.exceptions.RequestException as e:
+            messagebox.showerror("Erro", f"Erro ao excluir turma: {e}")
+
+    def _iniciar_edicao_nivel(self, turma_info, label_widget):
+        """Substitui o Label de nível por um Entry para edição."""
+        current_value = label_widget.cget("text")
+        
+        # Cria o Entry com o valor atual
+        entry = ctk.CTkEntry(self.turmas_scroll_frame, width=label_widget.winfo_width())
+        entry.insert(0, current_value)
+        
+        # Obtém a posição do grid do label atual
+        grid_info = label_widget.grid_info()
+        
+        # Esconde o label e mostra o entry no mesmo lugar
+        label_widget.grid_forget()
+        entry.grid(row=grid_info['row'], column=grid_info['column'], padx=5, pady=5, sticky="ew")
+        entry.focus_set() # Foca no entry para digitar imediatamente
+        
+        # Define callbacks para Salvar (Enter) ou Cancelar (Esc/FocusOut)
+        entry.bind("<Return>", lambda e: self._salvar_edicao_nivel(entry, turma_info, label_widget))
+        entry.bind("<Escape>", lambda e: self._cancelar_edicao_nivel(entry, label_widget))
+        entry.bind("<FocusOut>", lambda e: self._cancelar_edicao_nivel(entry, label_widget))
+
+    def _cancelar_edicao_nivel(self, entry_widget, label_widget):
+        """Cancela a edição e restaura o Label original."""
+        entry_widget.destroy()
+        # Restaura o label usando as configurações originais (assumindo coluna 0)
+        grid_info = label_widget.grid_info() 
+        # Nota: grid_info é perdido quando grid_forget é chamado, mas sabemos que é coluna 0
+        # Se precisarmos ser precisos, podemos salvar row/col antes. 
+        # Mas como o label_widget objeto ainda existe, podemos apenas dar grid novamente se soubermos a linha.
+        # Uma abordagem melhor é recarregar a lista se algo der errado, mas para UI simples:
+        self.carregar_lista_turmas() # Recarrega para garantir consistência visual e de dados
+
+    def _salvar_edicao_nivel(self, entry_widget, turma_info, label_widget):
+        """Envia o novo nível para a API."""
+        novo_nivel = entry_widget.get()
+        
+        try:
+            payload = {
+                "turma": turma_info["Turma"],
+                "horario": turma_info["Horário"],
+                "professor": turma_info["Professor"],
+                "novo_nivel": novo_nivel
+            }
+            response = requests.put(f"{API_BASE_URL}/api/turma/nivel", json=payload)
+            response.raise_for_status()
+            
+            # Sucesso: Recarrega a lista para mostrar o dado atualizado e restaurar a UI
+            self.carregar_lista_turmas()
+            
+        except requests.exceptions.RequestException as e:
+            messagebox.showerror("Erro", f"Erro ao atualizar nível: {e}")
+            self._cancelar_edicao_nivel(entry_widget, label_widget)
 
     # MODIFICADO: A lógica foi movida para a classe AddStudentToplevel
     def open_add_student_window(self):
