@@ -7,6 +7,7 @@ import requests
 import threading
 from datetime import datetime
 from urllib.parse import quote
+import webbrowser
 
 # --- CONFIGURAÇÕES GLOBAIS ---
 API_BASE_URL = "http://127.0.0.1:8000"
@@ -309,7 +310,7 @@ class App(ctk.CTk):
         # --- INICIALIZAÇÃO ---
         self.carregar_filtros_iniciais()
         self._load_config() # Carrega as configurações salvas
-        self.run_in_thread(self.carregar_lista_turmas) # Carrega dados de turmas em background para o form
+        self.carregar_lista_turmas() # Carrega dados de turmas (agora gerencia sua própria thread)
         self.run_in_thread(self.carregar_categorias) # Carrega categorias em background na inicialização
         self.show_main_menu() # Garante que o menu principal seja exibido no início
 
@@ -905,7 +906,7 @@ class App(ctk.CTk):
         for row_idx, aluno in enumerate(alunos_para_exibir, start=1):
             # Coluna 0: Nome (menos espaçamento à direita para aproximar do Nível)
             name_lbl = ctk.CTkLabel(self.alunos_scroll_frame, text=aluno.get('Nome', ''), anchor="e")
-            name_lbl.grid(row=row_idx, column=0, padx=(5, 2), pady=2, sticky="w")
+            name_lbl.grid(row=row_idx, column=0, padx=(5, 2), pady=2, sticky="ew")
             # Colunas seguintes: Removido o 'sticky="ew"' para permitir que as colunas encolham além da largura do texto.
             nivel_lbl = ctk.CTkLabel(self.alunos_scroll_frame, text=aluno.get('Nível', ''), anchor="center")
             nivel_lbl.grid(row=row_idx, column=1, padx=2, pady=2)
@@ -1048,16 +1049,24 @@ class App(ctk.CTk):
 
     def carregar_lista_turmas(self):
         """Busca e exibe a lista de turmas com botões de atalho."""
+        def _task():
+            try:
+                response = requests.get(f"{API_BASE_URL}/api/all-turmas")
+                response.raise_for_status()
+                turmas = response.json()
+                self.after(0, lambda: self._preencher_tabela_turmas(turmas))
+            except requests.exceptions.RequestException as e:
+                self.after(0, lambda: self._exibir_erro_turmas(e))
+        
+        self.run_in_thread(_task)
+
+    def _preencher_tabela_turmas(self, turmas):
+        self.turmas_data = turmas # Armazena em cache para o formulário de add aluno
         for widget in self.turmas_scroll_frame.winfo_children():
             widget.destroy()
-
+        
         try:
-            response = requests.get(f"{API_BASE_URL}/api/all-turmas")
-            response.raise_for_status()
-            turmas = response.json()
-            self.turmas_data = turmas # Armazena em cache para o formulário de add aluno
-
-            headers = ["Nível", "Turma", "Horário", "Professor", "Qtd.", "Atalho", "Excluir"]
+            headers = ["Turma", "Horário", "Nível", "Professor", "Qtd.", "Atalho", "Excluir"]
             self.turmas_scroll_frame.grid_columnconfigure(0, weight=1)
             self.turmas_scroll_frame.grid_columnconfigure(1, weight=1)
             self.turmas_scroll_frame.grid_columnconfigure(2, weight=1)
@@ -1072,14 +1081,15 @@ class App(ctk.CTk):
                 ctk.CTkLabel(self.turmas_scroll_frame, text=header, font=ctk.CTkFont(weight="bold"), anchor=anchor).grid(row=0, column=i, padx=5, pady=5, sticky="ew")
 
             for row_idx, turma in enumerate(turmas, start=1):
+                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Turma", ""), anchor="w").grid(row=row_idx, column=0, padx=5, pady=5, sticky="ew")
+                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Horário", ""), anchor="w").grid(row=row_idx, column=1, padx=5, pady=5, sticky="ew")
+
                 # Label do Nível com suporte a edição (Duplo Clique)
                 nivel_label = ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Nível", ""), anchor="w")
-                nivel_label.grid(row=row_idx, column=0, padx=5, pady=5, sticky="ew")
+                nivel_label.grid(row=row_idx, column=2, padx=5, pady=5, sticky="ew")
                 # Bind do evento de duplo clique esquerdo
                 nivel_label.bind("<Double-Button-1>", lambda e, t=turma, l=nivel_label: self._iniciar_edicao_nivel(t, l))
 
-                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Turma", ""), anchor="w").grid(row=row_idx, column=1, padx=5, pady=5, sticky="ew")
-                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Horário", ""), anchor="w").grid(row=row_idx, column=2, padx=5, pady=5, sticky="ew")
                 ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Professor", ""), anchor="w").grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
                 ctk.CTkLabel(self.turmas_scroll_frame, text=str(turma.get("qtd.", 0)), anchor="center").grid(row=row_idx, column=4, padx=5, pady=5, sticky="ew")
                 
@@ -1093,8 +1103,13 @@ class App(ctk.CTk):
                 btn_excluir.configure(command=lambda t=turma: self.confirmar_exclusao_turma(t))
                 btn_excluir.grid(row=row_idx, column=6, padx=5, pady=5)
 
-        except requests.exceptions.RequestException as e:
-            ctk.CTkLabel(self.turmas_scroll_frame, text=f"Erro ao carregar turmas: {e}").pack()
+        except Exception as e:
+            print(f"Erro ao atualizar interface de turmas: {e}")
+
+    def _exibir_erro_turmas(self, error):
+        for widget in self.turmas_scroll_frame.winfo_children():
+            widget.destroy()
+        ctk.CTkLabel(self.turmas_scroll_frame, text=f"Erro ao carregar turmas: {error}").pack()
 
     def usar_atalho_turma(self, turma_info: dict):
         """Preenche os filtros e muda para a aba de chamada."""
@@ -1740,7 +1755,19 @@ class ViewStudentToplevel(ctk.CTkToplevel):
                 value = self.master_app._formatar_data_para_exibicao(value)
 
             ctk.CTkLabel(main_frame, text=label_text, anchor="e", font=ctk.CTkFont(weight="bold")).grid(row=row, column=0, padx=(0, 10), pady=4, sticky="ew")
-            ctk.CTkLabel(main_frame, text=str(value if value is not None else "-"), anchor="w").grid(row=row, column=1, padx=0, pady=4, sticky="ew")
+            
+            if key == "Whatsapp" and value:
+                wa_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+                wa_frame.grid(row=row, column=1, padx=0, pady=4, sticky="ew")
+                ctk.CTkLabel(wa_frame, text=str(value), anchor="w").pack(side="left")
+                
+                digits = "".join(filter(str.isdigit, str(value)))
+                if digits:
+                    link = f"https://wa.me/55{digits}"
+                    ctk.CTkButton(wa_frame, text="💬", width=30, height=20, fg_color="#25D366", hover_color="#128C7E",
+                                  command=lambda l=link: webbrowser.open(l)).pack(side="left", padx=(10, 0))
+            else:
+                ctk.CTkLabel(main_frame, text=str(value if value is not None else "-"), anchor="w").grid(row=row, column=1, padx=0, pady=4, sticky="ew")
             row += 1
 
         ctk.CTkButton(main_frame, text="Fechar", command=self.destroy).grid(row=row, column=0, columnspan=2, pady=(20, 0), padx=50, sticky="ew")
