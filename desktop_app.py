@@ -290,6 +290,8 @@ class App(ctk.CTk):
         self.alunos_sort_state = [] # Lista de dicionários para histórico de ordenação: [{'key': 'Nome', 'reverse': False}, ...]
         self.alunos_filter_state = {} # Para filtros por coluna
         self.chamada_data = {} # Guarda os dados da API
+        self.turmas_filter_state = {} # Estado dos filtros da aba Turmas
+        self.turmas_sort_state = [] # Estado da ordenação da aba Turmas
         self.chamada_widgets = {} # Guarda os widgets de botão para poder ler o estado
         self.all_students_data = None # Cache para todos os alunos
         self.categorias_data = None # Cache para as categorias
@@ -905,7 +907,7 @@ class App(ctk.CTk):
         # Linhas de Alunos
         for row_idx, aluno in enumerate(alunos_para_exibir, start=1):
             # Coluna 0: Nome (menos espaçamento à direita para aproximar do Nível)
-            name_lbl = ctk.CTkLabel(self.alunos_scroll_frame, text=aluno.get('Nome', ''), anchor="e")
+            name_lbl = ctk.CTkLabel(self.alunos_scroll_frame, text=aluno.get('Nome', ''), anchor="w")
             name_lbl.grid(row=row_idx, column=0, padx=(5, 2), pady=2, sticky="ew")
             # Colunas seguintes: Removido o 'sticky="ew"' para permitir que as colunas encolham além da largura do texto.
             nivel_lbl = ctk.CTkLabel(self.alunos_scroll_frame, text=aluno.get('Nível', ''), anchor="center")
@@ -993,7 +995,10 @@ class App(ctk.CTk):
             return
 
         # Cria e exibe o menu
-        self.active_filter_menu = FilterMenu(self, key, unique_values, button_widget, self._apply_filter_and_sort)
+        self.active_filter_menu = FilterMenu(self, key, unique_values, button_widget, self._apply_filter_and_sort,
+                                             active_filters=self.alunos_filter_state.get(key),
+                                             cache_key=key,
+                                             align="left")
         # O novo FilterMenu (Frame) se posiciona e se destrói sozinho.
         # A referência é limpa no seu próprio método destroy.
 
@@ -1061,12 +1066,45 @@ class App(ctk.CTk):
         self.run_in_thread(_task)
 
     def _preencher_tabela_turmas(self, turmas):
-        self.turmas_data = turmas # Armazena em cache para o formulário de add aluno
+        self.turmas_data = turmas  # Armazena em cache
+
+        # --- Filtragem ---
+        turmas_exibir = list(turmas)
+        if self.turmas_filter_state:
+            for key, selected_values in self.turmas_filter_state.items():
+                if not selected_values: continue
+                turmas_exibir = [t for t in turmas_exibir if str(t.get(key, '')) in selected_values]
+
+        # --- Ordenação ---
+        if self.turmas_sort_state:
+            # Mapeamento para ordenação de Nível (reutilizando lógica se possível, ou definindo aqui)
+            nivel_order = {
+                'Iniciação B': 0, 'Iniciação A': 1, 'Nível 1': 2, 'Nível 2': 3,
+                'Nível 3': 4, 'Nível 4': 5, 'Adulto B': 6, 'Adulto A': 7
+            }
+            
+            def get_sort_value(item, sort_key):
+                val = item.get(sort_key, '')
+                if val is None: val = ''
+                if sort_key == 'Nível':
+                    return nivel_order.get(val, 99)
+                if sort_key == 'Horário':
+                    return val.split('-')[0]
+                return str(val).lower()
+
+            for sort_instruction in self.turmas_sort_state:
+                key = sort_instruction['key']
+                reverse = sort_instruction['reverse']
+                turmas_exibir.sort(key=lambda t, k=key: get_sort_value(t, k), reverse=reverse)
+
+        # --- Renderização ---
         for widget in self.turmas_scroll_frame.winfo_children():
             widget.destroy()
         
         try:
             headers = ["Turma", "Horário", "Nível", "Professor", "Qtd.", "Atalho", "Excluir"]
+            filterable_headers = ["Turma", "Horário", "Nível", "Professor"]
+            
             self.turmas_scroll_frame.grid_columnconfigure(0, weight=1)
             self.turmas_scroll_frame.grid_columnconfigure(1, weight=1)
             self.turmas_scroll_frame.grid_columnconfigure(2, weight=1)
@@ -1076,21 +1114,60 @@ class App(ctk.CTk):
             self.turmas_scroll_frame.grid_columnconfigure(6, weight=0) # Excluir (botão)
 
             for i, header in enumerate(headers):
-                # Centraliza o cabeçalho da quantidade
-                anchor = "center" if header == "Qtd." else "w"
-                ctk.CTkLabel(self.turmas_scroll_frame, text=header, font=ctk.CTkFont(weight="bold"), anchor=anchor).grid(row=0, column=i, padx=5, pady=5, sticky="ew")
+                if header in filterable_headers:
+                    # Cria botão de filtro
+                    display_text = header
+                    sort_info = next((item for item in self.turmas_sort_state if item['key'] == header), None)
+                    is_sorted = sort_info is not None
+                    is_filtered = header in self.turmas_filter_state and self.turmas_filter_state[header]
 
-            for row_idx, turma in enumerate(turmas, start=1):
-                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Turma", ""), anchor="w").grid(row=row_idx, column=0, padx=5, pady=5, sticky="ew")
-                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Horário", ""), anchor="w").grid(row=row_idx, column=1, padx=5, pady=5, sticky="ew")
+                    if is_sorted:
+                        sort_arrow = '▼' if sort_info['reverse'] else '▲'
+                        display_text = f"{header} {sort_arrow}"
+                    elif is_filtered:
+                        display_text += " ▾"
+
+                    fg_color = ("#e0e2e4", "#4a4d50") if (is_sorted or is_filtered) else "transparent"
+                    
+                    btn = ctk.CTkButton(self.turmas_scroll_frame, text=display_text,
+                                        font=ctk.CTkFont(weight="bold"),
+                                        fg_color=fg_color,
+                                        text_color=("gray10", "gray90"),
+                                        hover_color=("#d3d5d7", "#5a5d60"),
+                                        anchor="center",
+                                        command=lambda k=header: self._open_turmas_filter_menu(k, self.turmas_scroll_frame.winfo_children()[-1])) 
+                                        # Nota: O lambda captura o botão que acabamos de criar? Não, precisamos de referência.
+                                        # Vamos criar o botão e atribuir o command depois ou usar uma factory.
+                    
+                    # Recriando o botão para ter a referência correta no command
+                    btn = ctk.CTkButton(self.turmas_scroll_frame, text=display_text,
+                                        font=ctk.CTkFont(weight="bold"),
+                                        fg_color=fg_color,
+                                        text_color=("gray10", "gray90"),
+                                        hover_color=("#d3d5d7", "#5a5d60"),
+                                        anchor="center")
+                    btn.configure(command=lambda k=header, b=btn: self._open_turmas_filter_menu(k, b))
+                    
+                    if not (is_sorted or is_filtered):
+                        btn.configure(hover=False)
+                    
+                    btn.grid(row=0, column=i, padx=5, pady=5, sticky="ew")
+                else:
+                    # Cabeçalho normal
+                    anchor = "center" if header == "Qtd." else "w"
+                    ctk.CTkLabel(self.turmas_scroll_frame, text=header, font=ctk.CTkFont(weight="bold"), anchor=anchor).grid(row=0, column=i, padx=5, pady=5, sticky="ew")
+
+            for row_idx, turma in enumerate(turmas_exibir, start=1):
+                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Turma", ""), anchor="center").grid(row=row_idx, column=0, padx=5, pady=5, sticky="ew")
+                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Horário", ""), anchor="center").grid(row=row_idx, column=1, padx=5, pady=5, sticky="ew")
 
                 # Label do Nível com suporte a edição (Duplo Clique)
-                nivel_label = ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Nível", ""), anchor="w")
+                nivel_label = ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Nível", ""), anchor="center")
                 nivel_label.grid(row=row_idx, column=2, padx=5, pady=5, sticky="ew")
                 # Bind do evento de duplo clique esquerdo
                 nivel_label.bind("<Double-Button-1>", lambda e, t=turma, l=nivel_label: self._iniciar_edicao_nivel(t, l))
 
-                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Professor", ""), anchor="w").grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
+                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Professor", ""), anchor="center").grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
                 ctk.CTkLabel(self.turmas_scroll_frame, text=str(turma.get("qtd.", 0)), anchor="center").grid(row=row_idx, column=4, padx=5, pady=5, sticky="ew")
                 
                 # Botão de atalho com ícone
@@ -1105,6 +1182,46 @@ class App(ctk.CTk):
 
         except Exception as e:
             print(f"Erro ao atualizar interface de turmas: {e}")
+
+    def _open_turmas_filter_menu(self, key, button_widget):
+        """Abre o menu de filtro para a aba Turmas."""
+        if self.active_filter_menu and self.active_filter_menu.winfo_exists():
+            is_same_button = getattr(self.active_filter_menu, 'button_widget', None) == button_widget
+            self.active_filter_menu.destroy()
+            if is_same_button: return
+        self.after(10, lambda: self._create_turmas_filter_menu_safely(key, button_widget))
+
+    def _create_turmas_filter_menu_safely(self, key, button_widget):
+        if not self.turmas_data or self.active_filter_menu: return
+
+        # Filtra baseado nas outras colunas para mostrar apenas opções válidas
+        dados_para_menu = self.turmas_data
+        for filter_key, selected_values in self.turmas_filter_state.items():
+            if filter_key != key and selected_values:
+                dados_para_menu = [item for item in dados_para_menu if str(item.get(filter_key) or '') in selected_values]
+
+        unique_values = sorted(list(set(str(item.get(key) or '') for item in dados_para_menu)))
+
+        if not unique_values:
+            messagebox.showinfo("Filtro", f"Não há valores disponíveis para filtrar na coluna '{key}'.", parent=self)
+            return
+
+        self.active_filter_menu = FilterMenu(self, key, unique_values, button_widget, self._apply_turmas_filter_and_sort,
+                                             active_filters=self.turmas_filter_state.get(key),
+                                             cache_key=f"Turmas_{key}",
+                                             align="center",
+                                             show_sort_buttons=False)
+
+    def _apply_turmas_filter_and_sort(self, key, selected_values, sort_direction=None):
+        if selected_values is not None:
+            self.turmas_filter_state[key] = selected_values
+        
+        if sort_direction is not None:
+            self.turmas_sort_state = [s for s in self.turmas_sort_state if s['key'] != key]
+            self.turmas_sort_state.append({'key': key, 'reverse': sort_direction == 'desc'})
+        
+        # Reconstrói a tabela usando os dados em cache
+        self._preencher_tabela_turmas(self.turmas_data)
 
     def _exibir_erro_turmas(self, error):
         for widget in self.turmas_scroll_frame.winfo_children():
@@ -1821,19 +1938,21 @@ class FilterMenu(ctk.CTkFrame):
     # Defina um número (ex: 400) para uma altura fixa ou None para ajuste automático à janela.
     MANUAL_HEIGHT = 280
 
-    def __init__(self, master, key, values, button_widget, callback):
+    def __init__(self, master, key, values, button_widget, callback, active_filters=None, cache_key=None, align="left", show_sort_buttons=True):
         # O master agora é a janela principal da aplicação (App).
         # A altura será definida depois que o conteúdo for criado.
         super().__init__(master, corner_radius=8, border_width=1)
 
         self.key = key
+        self.cache_key = cache_key if cache_key else key
+        self.align = align
+        self.show_sort_buttons = show_sort_buttons
         self.callback = callback
         self.button_widget = button_widget # Armazena o botão que abriu o menu
         self.master_app = master
 
         # --- Variáveis de estado ---
-        # Se não houver filtro ativo para a chave, todos os valores são selecionados por padrão.
-        active_filters = self.master_app.alunos_filter_state.get(self.key)
+        # Se não houver filtro ativo (None), todos os valores são selecionados por padrão.
         initial_state = {value: tk.BooleanVar(value=True) for value in values} if active_filters is None else \
                         {value: tk.BooleanVar(value=value in active_filters) for value in values}
         self.check_vars = initial_state
@@ -1842,34 +1961,35 @@ class FilterMenu(ctk.CTkFrame):
         inner_padx = 3
 
         # --- Botões de Ordenação ---
-        sort_frame = ctk.CTkFrame(self, fg_color="transparent")
-        sort_frame.pack(fill="x", padx=inner_padx, pady=(5, 2))        
-        
-        # Define os textos dos botões de ordenação com base na coluna
-        if self.key in ['Nome', 'Turma', 'Professor']:
-            asc_text, desc_text = "Ordenar A-Z", "Ordenar Z-A"
-        elif self.key in ['Idade', 'Horário']:
-            asc_text, desc_text = "Ordenar < para >", "Ordenar > para <"
-        elif self.key in ['Nível', 'Categoria']:
-            asc_text, desc_text = "Ordenar < para >", "Ordenar > para <"
-        else:
-            asc_text, desc_text = "Ordenar Crescente", "Ordenar Decrescente"
+        if self.show_sort_buttons:
+            sort_frame = ctk.CTkFrame(self, fg_color="transparent")
+            sort_frame.pack(fill="x", padx=inner_padx, pady=(5, 2))        
+            
+            # Define os textos dos botões de ordenação com base na coluna
+            if self.key in ['Nome', 'Turma', 'Professor']:
+                asc_text, desc_text = "Ordenar A-Z", "Ordenar Z-A"
+            elif self.key in ['Idade', 'Horário']:
+                asc_text, desc_text = "Ordenar < para >", "Ordenar > para <"
+            elif self.key in ['Nível', 'Categoria']:
+                asc_text, desc_text = "Ordenar < para >", "Ordenar > para <"
+            else:
+                asc_text, desc_text = "Ordenar Crescente", "Ordenar Decrescente"
 
-        ctk.CTkButton(sort_frame, 
-                      text=asc_text, 
-                      height=22, 
-                      font=ctk.CTkFont(size=9), 
-                      anchor="center",
-                      command=lambda: self._apply_and_close(sort_direction='asc')).pack(fill="x")
-        ctk.CTkButton(sort_frame, 
-                      text=desc_text, 
-                      height=22, 
-                      font=ctk.CTkFont(size=9), 
-                      anchor="center",
-                      command=lambda: self._apply_and_close(sort_direction='desc')).pack(fill="x", pady=(2,0))
-        
-        # --- Linha divisória ---
-        ctk.CTkFrame(self, height=1, fg_color="gray50").pack(fill="x", padx=inner_padx, pady=3)
+            ctk.CTkButton(sort_frame, 
+                        text=asc_text, 
+                        height=22, 
+                        font=ctk.CTkFont(size=9), 
+                        anchor="center",
+                        command=lambda: self._apply_and_close(sort_direction='asc')).pack(fill="x")
+            ctk.CTkButton(sort_frame, 
+                        text=desc_text, 
+                        height=22, 
+                        font=ctk.CTkFont(size=9), 
+                        anchor="center",
+                        command=lambda: self._apply_and_close(sort_direction='desc')).pack(fill="x", pady=(2,0))
+            
+            # --- Linha divisória ---
+            ctk.CTkFrame(self, height=1, fg_color="gray50").pack(fill="x", padx=inner_padx, pady=3)
 
         # --- Filtros ---
         filter_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -1879,14 +1999,27 @@ class FilterMenu(ctk.CTkFrame):
         # --- Posicionamento e Cálculo de Altura (FEITO ANTES DE CRIAR O SCROLL FRAME) ---
         # Primeiro, calcula a posição e tamanho padrão
         self.update_idletasks()
-        default_width = max(200, button_widget.winfo_width())
-        button_x_rel = button_widget.winfo_rootx() - master.winfo_rootx()
-        default_y = button_widget.winfo_rooty() - master.winfo_rooty() + button_widget.winfo_height()
-        default_x = button_x_rel + 5
 
         # Verifica se há geometria em cache para esta coluna e a utiliza
-        cached_geometry = self.master_app.filter_menu_geometry_cache.get(self.key)
+        cached_geometry = self.master_app.filter_menu_geometry_cache.get(self.cache_key)
+        
+        button_width = button_widget.winfo_width()
+        default_width = max(200, button_width)
         initial_width = cached_geometry.get('width', default_width) if cached_geometry else default_width
+
+        button_x_rel = button_widget.winfo_rootx() - master.winfo_rootx()
+        default_y = button_widget.winfo_rooty() - master.winfo_rooty() + button_widget.winfo_height()
+        
+        # Calcula X (Centralizado ou Alinhado à Esquerda)
+        if self.align == "center":
+            default_x = button_x_rel + (button_width // 2) - (initial_width // 2)
+        else:
+            default_x = button_x_rel + 5
+        
+        # Ajuste simples para não sair da tela (esquerda/direita)
+        master_width = master.winfo_width()
+        default_x = max(5, min(default_x, master_width - initial_width - 5))
+
         x = cached_geometry.get('x', default_x) if cached_geometry else default_x
         y = cached_geometry.get('y', default_y) if cached_geometry else default_y
 
@@ -1995,7 +2128,7 @@ class FilterMenu(ctk.CTkFrame):
         # Isso impede que uma geometria inválida (ex: altura 0) seja salva no config.json.
         if self.winfo_exists() and self.winfo_height() > 50:
             if self.master_app.alunos_grid_edit_mode.get():
-                self.master_app.filter_menu_geometry_cache[self.key] = {
+                self.master_app.filter_menu_geometry_cache[self.cache_key] = {
                     'width': self.winfo_width(),
                     'x': self.winfo_x(),
                     'y': self.winfo_y()
