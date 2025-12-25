@@ -8,6 +8,7 @@ import threading
 from datetime import datetime
 from urllib.parse import quote
 import webbrowser
+import calendar
 
 # --- CONFIGURAÇÕES GLOBAIS ---
 API_BASE_URL = "http://127.0.0.1:8000"
@@ -498,6 +499,12 @@ class App(ctk.CTk):
             response = requests.get(f"{API_BASE_URL}/api/alunos", params=params)
             response.raise_for_status()
             self.chamada_data = response.json()
+            
+            # Recalcula as datas da chamada com base nos dias da semana da turma e no mês atual
+            # Isso garante que novas turmas (ou turmas sem registros) mostrem as colunas corretas
+            dias_calculados = self._calcular_dias_chamada(self.chamada_turma_combo.get())
+            if dias_calculados:
+                self.chamada_data['datas'] = dias_calculados
 
             if not self.chamada_data.get('alunos'):
                 self.after(0, lambda: self.chamada_info_label.configure(text="Nenhum aluno encontrado para os filtros selecionados."))
@@ -511,6 +518,40 @@ class App(ctk.CTk):
             error_text = "Erro ao buscar dados."
             self.after(0, lambda: self.chamada_info_label.configure(text=error_text))
             self.after(0, lambda: messagebox.showerror("Erro de API", f"Não foi possível buscar os dados dos alunos.\n\nErro: {e}"))
+
+    def _calcular_dias_chamada(self, turma_str):
+        """Gera lista de datas (dd/mm/yyyy) do mês atual para os dias da semana da turma."""
+        if not turma_str:
+            return []
+            
+        turma_lower = turma_str.lower()
+        # Mapeia dias da semana (0=Segunda, 6=Domingo)
+        dias_map = {
+            "segunda": 0, "terça": 1, "terca": 1, 
+            "quarta": 2, "quinta": 3, "sexta": 4, 
+            "sábado": 5, "sabado": 5, "domingo": 6
+        }
+        
+        dias_indices = set()
+        for nome, idx in dias_map.items():
+            if nome in turma_lower:
+                dias_indices.add(idx)
+                
+        if not dias_indices:
+            return []
+            
+        hoje = datetime.now()
+        ano = hoje.year
+        mes = hoje.month
+        
+        _, num_dias = calendar.monthrange(ano, mes)
+        datas = []
+        for dia in range(1, num_dias + 1):
+            dt = datetime(ano, mes, dia)
+            if dt.weekday() in dias_indices:
+                datas.append(dt.strftime('%d/%m/%Y'))
+                
+        return datas
 
     def construir_grid(self):
         """Cria a tabela de chamada com base nos dados recebidos."""
@@ -1180,16 +1221,26 @@ class App(ctk.CTk):
                     ctk.CTkLabel(self.turmas_scroll_frame, text=header, font=ctk.CTkFont(weight="bold"), anchor=anchor).grid(row=0, column=i, padx=5, pady=5, sticky="ew")
 
             for row_idx, turma in enumerate(turmas_exibir, start=1):
-                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Turma", ""), anchor="center").grid(row=row_idx, column=0, padx=5, pady=5, sticky="ew")
-                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Horário", ""), anchor="center").grid(row=row_idx, column=1, padx=5, pady=5, sticky="ew")
+                # Turma
+                turma_label = ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Turma", ""), anchor="center")
+                turma_label.grid(row=row_idx, column=0, padx=5, pady=5, sticky="ew")
+                turma_label.bind("<Double-Button-1>", lambda e, t=turma, l=turma_label, c="Turma": self._iniciar_edicao_celula(t, l, c))
 
-                # Label do Nível com suporte a edição (Duplo Clique)
+                # Horário
+                horario_label = ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Horário", ""), anchor="center")
+                horario_label.grid(row=row_idx, column=1, padx=5, pady=5, sticky="ew")
+                horario_label.bind("<Double-Button-1>", lambda e, t=turma, l=horario_label, c="Horário": self._iniciar_edicao_celula(t, l, c))
+
+                # Nível
                 nivel_label = ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Nível", ""), anchor="center")
                 nivel_label.grid(row=row_idx, column=2, padx=5, pady=5, sticky="ew")
-                # Bind do evento de duplo clique esquerdo
-                nivel_label.bind("<Double-Button-1>", lambda e, t=turma, l=nivel_label: self._iniciar_edicao_nivel(t, l))
+                nivel_label.bind("<Double-Button-1>", lambda e, t=turma, l=nivel_label, c="Nível": self._iniciar_edicao_celula(t, l, c))
 
-                ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Professor", ""), anchor="center").grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
+                # Professor
+                prof_label = ctk.CTkLabel(self.turmas_scroll_frame, text=turma.get("Professor", ""), anchor="center")
+                prof_label.grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
+                prof_label.bind("<Double-Button-1>", lambda e, t=turma, l=prof_label, c="Professor": self._iniciar_edicao_celula(t, l, c))
+
                 ctk.CTkLabel(self.turmas_scroll_frame, text=str(turma.get("qtd.", 0)), anchor="center").grid(row=row_idx, column=4, padx=5, pady=5, sticky="ew")
                 
                 # Botão de atalho com ícone
@@ -1290,11 +1341,12 @@ class App(ctk.CTk):
             response.raise_for_status()
             messagebox.showinfo("Sucesso", "Turma excluída com sucesso!")
             self.carregar_lista_turmas() # Recarrega a lista para remover o item excluído
+            self.carregar_filtros_iniciais() # Atualiza os filtros de busca para refletir a exclusão
         except requests.exceptions.RequestException as e:
             messagebox.showerror("Erro", f"Erro ao excluir turma: {e}")
 
-    def _iniciar_edicao_nivel(self, turma_info, label_widget):
-        """Substitui o Label de nível por um Entry para edição."""
+    def _iniciar_edicao_celula(self, turma_info, label_widget, campo):
+        """Substitui o Label por um Entry para edição de qualquer campo."""
         current_value = label_widget.cget("text")
         
         # Cria o Entry com o valor atual
@@ -1310,41 +1362,73 @@ class App(ctk.CTk):
         entry.focus_set() # Foca no entry para digitar imediatamente
         
         # Define callbacks para Salvar (Enter) ou Cancelar (Esc/FocusOut)
-        entry.bind("<Return>", lambda e: self._salvar_edicao_nivel(entry, turma_info, label_widget))
-        entry.bind("<Escape>", lambda e: self._cancelar_edicao_nivel(entry, label_widget))
-        entry.bind("<FocusOut>", lambda e: self._cancelar_edicao_nivel(entry, label_widget))
+        entry.bind("<Return>", lambda e: self._salvar_edicao_celula(entry, turma_info, label_widget, campo))
+        entry.bind("<Escape>", lambda e: self._cancelar_edicao_celula(entry, label_widget))
+        entry.bind("<FocusOut>", lambda e: self._cancelar_edicao_celula(entry, label_widget))
 
-    def _cancelar_edicao_nivel(self, entry_widget, label_widget):
+    def _cancelar_edicao_celula(self, entry_widget, label_widget):
         """Cancela a edição e restaura o Label original."""
         entry_widget.destroy()
         # Restaura o label usando as configurações originais (assumindo coluna 0)
-        grid_info = label_widget.grid_info() 
-        # Nota: grid_info é perdido quando grid_forget é chamado, mas sabemos que é coluna 0
-        # Se precisarmos ser precisos, podemos salvar row/col antes. 
-        # Mas como o label_widget objeto ainda existe, podemos apenas dar grid novamente se soubermos a linha.
-        # Uma abordagem melhor é recarregar a lista se algo der errado, mas para UI simples:
         self.carregar_lista_turmas() # Recarrega para garantir consistência visual e de dados
 
-    def _salvar_edicao_nivel(self, entry_widget, turma_info, label_widget):
-        """Envia o novo nível para a API."""
-        novo_nivel = entry_widget.get()
+    def _salvar_edicao_celula(self, entry_widget, turma_info, label_widget, campo):
+        """Envia o novo valor para a API."""
+        novo_valor = entry_widget.get()
         
-        try:
-            payload = {
-                "turma": turma_info["Turma"],
-                "horario": turma_info["Horário"],
-                "professor": turma_info["Professor"],
-                "novo_nivel": novo_nivel
+        endpoint = ""
+        request_kwargs = {}
+
+        if campo == "Nível":
+            # Endpoint específico existente para nível
+            endpoint = "/api/turma/nivel"
+            request_kwargs = {
+                "json": {
+                    "turma": turma_info.get("Turma") or "",
+                    "horario": turma_info.get("Horário") or "",
+                    "professor": turma_info.get("Professor") or "",
+                    "novo_nivel": novo_valor
+                }
             }
-            response = requests.put(f"{API_BASE_URL}/api/turma/nivel", json=payload)
+        else:
+            # Endpoint geral para alteração de chaves (Turma, Horário, Professor)
+            endpoint = "/api/turma"
+            
+            # CORREÇÃO: Estrutura ajustada conforme erro 422 (espera old_* e new_data no corpo)
+            payload = {
+                "old_turma": turma_info.get("Turma") or "",
+                "old_horario": turma_info.get("Horário") or "",
+                "old_professor": turma_info.get("Professor") or "",
+                "new_data": {
+                    "Turma": novo_valor if campo == "Turma" else (turma_info.get("Turma") or ""),
+                    "Horário": novo_valor if campo == "Horário" else (turma_info.get("Horário") or ""),
+                    "Nível": turma_info.get("Nível") or "",
+                    "Professor": novo_valor if campo == "Professor" else (turma_info.get("Professor") or ""),
+                    "Atalho": turma_info.get("Atalho") or "",
+                    "Data_Inicio": turma_info.get("Data de Início") or ""
+                }
+            }
+            request_kwargs = {"json": payload}
+
+        try:
+            response = requests.put(f"{API_BASE_URL}{endpoint}", **request_kwargs)
             response.raise_for_status()
             
             # Sucesso: Recarrega a lista para mostrar o dado atualizado e restaurar a UI
             self.carregar_lista_turmas()
+            self.carregar_filtros_iniciais() # Atualiza filtros se mudou algo relevante
             
         except requests.exceptions.RequestException as e:
-            messagebox.showerror("Erro", f"Erro ao atualizar nível: {e}")
-            self._cancelar_edicao_nivel(entry_widget, label_widget)
+            error_msg = f"Erro ao atualizar {campo}: {e}"
+            try:
+                if e.response is not None:
+                    detail = e.response.json().get('detail')
+                    if detail:
+                        error_msg += f"\nDetalhes: {detail}"
+            except:
+                pass
+            messagebox.showerror("Erro", error_msg)
+            self._cancelar_edicao_celula(entry_widget, label_widget)
 
     # MODIFICADO: A lógica foi movida para a classe AddStudentToplevel
     def open_add_student_window(self):
@@ -1414,6 +1498,7 @@ class App(ctk.CTk):
     def on_turma_added(self):
         """Callback executado quando uma turma é adicionada com sucesso."""
         self.carregar_lista_turmas()
+        self.carregar_filtros_iniciais() # Atualiza os filtros de busca com a nova turma/professor
         self.add_turma_toplevel = None
 
 
@@ -1508,6 +1593,7 @@ class AddStudentToplevel(ctk.CTkToplevel):
 
     def _on_close(self):
         """Libera o foco e destrói a janela, limpando a referência na aplicação principal."""
+        self.master_app.window_geometries["add_student"] = self.geometry() # Salva geometria ao fechar
         self.grab_release()
         self.destroy()
         self.master_app.add_student_toplevel = None # Limpa a referência na app principal
