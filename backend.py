@@ -133,6 +133,22 @@ class TurmaNivelPayload(BaseModel):
     professor: str
     novo_nivel: str
 
+class TurmaPayload(BaseModel):
+    """Define a estrutura de uma turma para criação/edição."""
+    Turma: str
+    Horário: str
+    Professor: str
+    Nível: str = ""
+    Atalho: str = ""
+    Data_Inicio: str = ""
+
+class TurmaEditPayload(BaseModel):
+    """Estrutura para identificar e atualizar uma turma."""
+    old_turma: str
+    old_horario: str
+    old_professor: str
+    new_data: TurmaPayload
+
 # --- ENDPOINTS DA API ---
 
 @app.get("/")
@@ -578,6 +594,89 @@ def atualizar_nivel_turma(payload: TurmaNivelPayload):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao atualizar nível: {e}")
+
+@app.post("/api/turma")
+def adicionar_turma(turma_data: TurmaPayload):
+    """Adiciona uma nova turma à planilha 'Turmas'."""
+    try:
+        df_alunos, df_turmas, df_registros, df_categorias = get_dados_cached()
+
+        # Verifica duplicidade
+        df_check = df_turmas.copy()
+        df_check['Horario_Formatado'] = df_check['Horário'].apply(formatar_horario)
+        horario_input = formatar_horario(turma_data.Horário)
+
+        exists = ((df_check['Turma'] == turma_data.Turma) & 
+                  (df_check['Horario_Formatado'] == horario_input) & 
+                  (df_check['Professor'] == turma_data.Professor)).any()
+
+        if exists:
+             raise HTTPException(status_code=409, detail="Esta turma já existe.")
+
+        nova_turma = {
+            "Turma": turma_data.Turma,
+            "Horário": turma_data.Horário,
+            "Professor": turma_data.Professor,
+            "Nível": turma_data.Nível,
+            "Atalho": turma_data.Atalho,
+            "Data de Início": turma_data.Data_Inicio
+        }
+        
+        df_turmas = pd.concat([df_turmas, pd.DataFrame([nova_turma])], ignore_index=True)
+
+        with pd.ExcelWriter(NOME_ARQUIVO, engine='openpyxl') as writer:
+            df_alunos.to_excel(writer, sheet_name='Alunos', index=False)
+            df_turmas.to_excel(writer, sheet_name='Turmas', index=False)
+            df_categorias.to_excel(writer, sheet_name='Categorias', index=False)
+            df_registros.to_excel(writer, sheet_name='Registros', index=False)
+
+        _cache["timestamp"] = 0
+        return {"status": "Turma adicionada com sucesso!"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao adicionar turma: {e}")
+
+@app.put("/api/turma")
+def editar_turma(payload: TurmaEditPayload):
+    """Edita uma turma existente."""
+    try:
+        df_alunos, df_turmas_cache, df_registros, df_categorias = get_dados_cached()
+        df_turmas = df_turmas_cache.copy()
+        
+        df_turmas_temp = df_turmas.copy()
+        df_turmas_temp['Horario_Formatado'] = df_turmas_temp['Horário'].apply(formatar_horario)
+        
+        mask = (
+            (df_turmas_temp['Turma'] == payload.old_turma) & 
+            (df_turmas_temp['Horario_Formatado'] == payload.old_horario) & 
+            (df_turmas_temp['Professor'] == payload.old_professor)
+        )
+        
+        if not mask.any():
+            raise HTTPException(status_code=404, detail="Turma original não encontrada.")
+            
+        idx = df_turmas_temp[mask].index[0]
+        
+        df_turmas.at[idx, 'Turma'] = payload.new_data.Turma
+        df_turmas.at[idx, 'Horário'] = payload.new_data.Horário
+        df_turmas.at[idx, 'Professor'] = payload.new_data.Professor
+        df_turmas.at[idx, 'Nível'] = payload.new_data.Nível
+        df_turmas.at[idx, 'Atalho'] = payload.new_data.Atalho
+        df_turmas.at[idx, 'Data de Início'] = payload.new_data.Data_Inicio
+
+        with pd.ExcelWriter(NOME_ARQUIVO, engine='openpyxl') as writer:
+            df_alunos.to_excel(writer, sheet_name='Alunos', index=False)
+            df_turmas.to_excel(writer, sheet_name='Turmas', index=False)
+            df_categorias.to_excel(writer, sheet_name='Categorias', index=False)
+            df_registros.to_excel(writer, sheet_name='Registros', index=False)
+            
+        _cache["timestamp"] = 0
+        return {"status": "Turma atualizada com sucesso!"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao editar turma: {e}")
 
 # Para rodar este servidor, use o comando no terminal:
 # uvicorn backend:app --reload

@@ -229,6 +229,10 @@ class App(ctk.CTk):
         self.add_student_button = ctk.CTkButton(self, text="+ Adicionar Aluno", command=self.open_add_student_window)
         self.add_student_button.place(relx=1.0, rely=0.0, x=-20, y=10, anchor="ne")
 
+        # --- Botão Adicionar Turma (canto superior esquerdo, visível apenas na aba Turmas) ---
+        self.add_turma_button = ctk.CTkButton(self, text="+ Adicionar Turma", command=self.open_add_turma_window)
+        # Inicialmente oculto, gerenciado por show_view
+
         # --- 2.2. Conteúdo da Aba "Chamada" ---
         self.tab_view.tab("Chamada").grid_columnconfigure(0, weight=1)
         self.tab_view.tab("Chamada").grid_columnconfigure(1, weight=0) # Coluna para o botão
@@ -299,10 +303,12 @@ class App(ctk.CTk):
         self.active_filter_menu = None # Referência ao menu de filtro ativo
         self.add_student_toplevel = None # Referência para a janela de adicionar aluno
         self.edit_student_toplevel = None # Referência para a janela de editar aluno
+        self.add_turma_toplevel = None # Referência para a janela de adicionar turma
         self.filter_menu_geometry_cache = {} # Cache para a geometria dos menus de filtro
         self.column_widths_cache = {} # Cache para a largura das colunas da aba Alunos
         self.last_student_add_data = {} # Guarda os últimos dados para preenchimento
         self.alunos_grid_resizers = [] # Lista para guardar os widgets de redimensionamento
+        self.window_geometries = {} # Cache para geometria das janelas (Toplevels)
         
         # Mapeamento de views para seus frames de controle
         self.control_frames = {
@@ -331,6 +337,7 @@ class App(ctk.CTk):
                     key: geo for key, geo in loaded_geometries.items()
                     if geo.get('width', 0) > 50
                 }
+                self.window_geometries = config.get("window_geometries", {})
         except (FileNotFoundError, json.JSONDecodeError):
             self.column_widths_cache = {} # Se o arquivo não existe ou está corrompido, usa o padrão
             self.filter_menu_geometry_cache = {}
@@ -365,6 +372,16 @@ class App(ctk.CTk):
 
         config["filter_menu_geometry"] = self.filter_menu_geometry_cache
 
+        # 4. Salva geometrias das janelas abertas (se houver)
+        if self.add_turma_toplevel and self.add_turma_toplevel.winfo_exists():
+            self.window_geometries["add_turma"] = self.add_turma_toplevel.geometry()
+        if self.add_student_toplevel and self.add_student_toplevel.winfo_exists():
+            self.window_geometries["add_student"] = self.add_student_toplevel.geometry()
+        if self.edit_student_toplevel and self.edit_student_toplevel.winfo_exists():
+            self.window_geometries["add_student"] = self.edit_student_toplevel.geometry()
+            
+        config["window_geometries"] = self.window_geometries
+
         # 4. Salva o dicionário de configuração completo no arquivo
         with open("config.json", "w", encoding='utf-8') as f:
             json.dump(config, f, indent=4)
@@ -394,6 +411,9 @@ class App(ctk.CTk):
             frame.grid_forget()
         self.main_menu_frame.grid_forget()
 
+        # Esconde o botão de adicionar turma por padrão
+        self.add_turma_button.place_forget()
+
         if view_name in self.control_frames:
             self.control_frames[view_name].grid(row=0, column=0, sticky="nsew")
         if view_name == "Alunos":
@@ -406,6 +426,8 @@ class App(ctk.CTk):
             # Recolhe o menu ao selecionar "Turmas"
             if self.sidebar_is_open:
                 self.toggle_sidebar()
+            # Mostra o botão de adicionar turma (posicionado à direita do menu hambúrguer)
+            self.add_turma_button.place(relx=0.0, rely=0.0, x=70, y=10, anchor="nw")
 
     def show_main_menu(self):
         """Mostra o menu principal e esconde os de controle."""
@@ -1381,6 +1403,19 @@ class App(ctk.CTk):
         self.add_student_toplevel = None
         self.edit_student_toplevel = None
 
+    def open_add_turma_window(self):
+        """Abre uma janela Toplevel para adicionar uma nova turma."""
+        if self.add_turma_toplevel is not None and self.add_turma_toplevel.winfo_exists():
+            self.add_turma_toplevel.lift()
+            return
+        
+        self.add_turma_toplevel = AddTurmaToplevel(self, self.on_turma_added)
+
+    def on_turma_added(self):
+        """Callback executado quando uma turma é adicionada com sucesso."""
+        self.carregar_lista_turmas()
+        self.add_turma_toplevel = None
+
 
     def _center_toplevel(self, toplevel):
         toplevel.update_idletasks()
@@ -1464,7 +1499,11 @@ class AddStudentToplevel(ctk.CTkToplevel):
 
         self._build_form()
 
-        self.after(10, lambda: self.master_app._center_toplevel(self))
+        # Restaura geometria salva ou centraliza
+        if "add_student" in self.master_app.window_geometries:
+            self.geometry(self.master_app.window_geometries["add_student"])
+        else:
+            self.after(10, lambda: self.master_app._center_toplevel(self))
         self.after(100, lambda: self.widgets['nome'].focus_set())
 
     def _on_close(self):
@@ -1473,6 +1512,7 @@ class AddStudentToplevel(ctk.CTkToplevel):
         self.destroy()
         self.master_app.add_student_toplevel = None # Limpa a referência na app principal
         self.master_app.edit_student_toplevel = None
+        self.master_app.window_geometries["add_student"] = self.geometry() # Salva geometria ao fechar
 
     def _build_form(self):
         """Constrói todos os widgets dentro do formulário."""
@@ -1709,7 +1749,6 @@ class AddStudentToplevel(ctk.CTkToplevel):
             if e.response is not None:
                 if e.response.status_code == 404:
                     url_tentada = e.response.request.url if e.response.request else "URL desconhecida"
-                    error_msg += f"\n\nErro 404 (Não Encontrado):\nO servidor não encontrou o caminho:\n{url_tentada}\n\nProvável causa: O aluno não foi encontrado com o Nome/Aniversário fornecidos."
                     error_msg += f"\n\nErro 404 (Não Encontrado):\nO servidor não encontrou o aluno na URL:\n{url_tentada}\n\nVerifique se o nome do aluno no banco é exatamente '{self.edit_data.get('Nome')}'."
                 else:
                     error_msg += f"\nStatus Code: {e.response.status_code}"
@@ -1835,6 +1874,109 @@ class AddStudentToplevel(ctk.CTkToplevel):
                 if (t_info.get("Turma") == turma and t_info.get("Horário") == horario and t_info.get("Professor") == prof):
                     return t_info.get("Nível", "-")
         return "-"
+
+# --- NOVA CLASSE PARA O FORMULÁRIO DE ADIÇÃO DE TURMA ---
+class AddTurmaToplevel(ctk.CTkToplevel):
+    def __init__(self, master, on_success_callback):
+        super().__init__(master)
+        self.master_app = master
+        self.on_success = on_success_callback
+
+        self.title("Adicionar Nova Turma")
+        self.geometry("400x350")
+        self.transient(master)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        
+        self.widgets = {}
+        self._build_form()
+        
+        # Restaura geometria salva ou centraliza
+        if "add_turma" in self.master_app.window_geometries:
+            self.geometry(self.master_app.window_geometries["add_turma"])
+        else:
+            self.after(10, lambda: self.master_app._center_toplevel(self))
+
+    def _on_close(self):
+        """Salva a geometria e fecha a janela."""
+        self.master_app.window_geometries["add_turma"] = self.geometry()
+        self.destroy()
+        self.master_app.add_turma_toplevel = None
+
+    def _build_form(self):
+        frame = ctk.CTkFrame(self, fg_color="transparent")
+        frame.pack(padx=20, pady=20, fill="both", expand=True)
+        frame.grid_columnconfigure(0, weight=1)
+
+        # Campos
+        ctk.CTkLabel(frame, text="Turma:", anchor="w").grid(row=0, column=0, sticky="ew", pady=(0, 2))
+        self.widgets['turma'] = ctk.CTkEntry(frame, placeholder_text="Ex: Segunda e Quarta")
+        self.widgets['turma'].grid(row=1, column=0, sticky="ew", pady=(0, 10))
+
+        ctk.CTkLabel(frame, text="Horário (só nºs):", anchor="w").grid(row=2, column=0, sticky="ew", pady=(0, 2))
+        self.widgets['horario'] = ctk.CTkEntry(frame, placeholder_text="00h00")
+        self.widgets['horario'].grid(row=3, column=0, sticky="ew", pady=(0, 10))
+        self.widgets['horario'].bind("<KeyRelease>", self._format_time_entry)
+
+        ctk.CTkLabel(frame, text="Nível:", anchor="w").grid(row=4, column=0, sticky="ew", pady=(0, 2))
+        self.widgets['nivel'] = ctk.CTkEntry(frame, placeholder_text="Ex: Nível 1")
+        self.widgets['nivel'].grid(row=5, column=0, sticky="ew", pady=(0, 10))
+
+        ctk.CTkLabel(frame, text="Professor(a):", anchor="w").grid(row=6, column=0, sticky="ew", pady=(0, 2))
+        self.widgets['professor'] = ctk.CTkEntry(frame, placeholder_text="Nome do Professor")
+        self.widgets['professor'].grid(row=7, column=0, sticky="ew", pady=(0, 20))
+
+        # Botão Salvar
+        ctk.CTkButton(frame, text="Salvar Turma", command=self._submit, height=40).grid(row=8, column=0, sticky="ew")
+
+    def _format_time_entry(self, event):
+        """Aplica máscara 00h00 no campo de horário."""
+        if event.keysym in ("BackSpace", "Delete"): return
+        entry = event.widget
+        text = entry.get()
+        digits = "".join(filter(str.isdigit, text))
+        
+        formatted = digits
+        if len(digits) >= 2:
+            formatted = digits[:2] + "h" + digits[2:4]
+        
+        if text != formatted:
+            entry.delete(0, "end")
+            entry.insert(0, formatted)
+
+    def _submit(self):
+        data = {
+            "Turma": self.widgets['turma'].get(),
+            "Horário": self.widgets['horario'].get(),
+            "Nível": self.widgets['nivel'].get(),
+            "Professor": self.widgets['professor'].get()
+        }
+
+        if not all(data.values()):
+            messagebox.showwarning("Aviso", "Preencha todos os campos.", parent=self)
+            return
+
+        try:
+            # Ajustado para /api/turma (singular) para manter consistência com DELETE e PUT
+            response = requests.post(f"{API_BASE_URL}/api/turma", json=data)
+            response.raise_for_status()
+            messagebox.showinfo("Sucesso", "Turma adicionada com sucesso!", parent=self)
+            self.on_success()
+            self._on_close()
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Erro ao adicionar turma.\n\nErro técnico: {e}"
+            try:
+                if e.response is not None:
+                    if e.response.status_code == 404:
+                        error_msg += f"\n\nErro 404: Rota não encontrada ({e.response.url})."
+                    elif e.response.status_code == 405:
+                        error_msg += f"\n\nErro 405: Método não permitido em ({e.response.url})."
+                    error_detail = e.response.json().get('detail', '')
+                    if error_detail:
+                        error_msg += f"\n\nDetalhe do Servidor: {error_detail}"
+            except:
+                pass
+            messagebox.showerror("Erro", error_msg, parent=self)
 
 # --- NOVA CLASSE PARA VISUALIZAÇÃO DE ALUNO ---
 class ViewStudentToplevel(ctk.CTkToplevel):
