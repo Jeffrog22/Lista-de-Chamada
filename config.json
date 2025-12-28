@@ -96,12 +96,13 @@
             "y": 123
         },
         "Turmas_Turma": {
-            "width": 136,
-            "x": 144,
+            "width": 157,
+            "x": 134,
             "y": 123
         }
     },
     "window_geometries": {
-        "add_turma": "244x384+157+190"
+        "add_turma": "244x384+157+190",
+        "add_student": "600x550+326+101"
     }
 }

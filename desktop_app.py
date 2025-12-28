@@ -557,32 +557,57 @@ class App(ctk.CTk):
         """Cria a tabela de chamada com base nos dados recebidos."""
         self.chamada_widgets = {}
         
-        headers = ['Nível', 'Nome'] + [d.split('/')[0] for d in self.chamada_data['datas']]
+        # Tenta obter o nível atualizado a partir da lista de turmas (cache) para garantir precisão
+        nivel_turma = ""
+        if self.turmas_data:
+            turma_sel = self.chamada_turma_combo.get()
+            horario_sel = self.chamada_horario_combo.get()
+            prof_sel = self.chamada_prof_var.get()
+            for t in self.turmas_data:
+                if t.get('Turma') == turma_sel and t.get('Horário') == horario_sel and t.get('Professor') == prof_sel:
+                    nivel_turma = t.get('Nível', '')
+                    break
+
+        # Fallback: Se não encontrou no cache, tenta pegar do primeiro aluno
+        if not nivel_turma and self.chamada_data.get('alunos'):
+            nivel_turma = self.chamada_data['alunos'][0].get('Nível', '')
         
+        # Obtém nome do mês atual
+        meses_pt = {1: 'JANEIRO', 2: 'FEVEREIRO', 3: 'MARÇO', 4: 'ABRIL', 5: 'MAIO', 6: 'JUNHO',
+                    7: 'JULHO', 8: 'AGOSTO', 9: 'SETEMBRO', 10: 'OUTUBRO', 11: 'NOVEMBRO', 12: 'DEZEMBRO'}
+        mes_atual = meses_pt.get(datetime.now().month, '')
+
         # Configura o grid dentro do scrollable frame
-        self.chamada_scroll_frame.grid_columnconfigure(1, weight=1) # Coluna do nome
+        self.chamada_scroll_frame.grid_columnconfigure(0, weight=1) # Coluna do nome agora é a 0
 
-        # Cria os cabeçalhos
-        for i, header_text in enumerate(headers):
-            header_label = ctk.CTkLabel(self.chamada_scroll_frame, text=header_text, font=ctk.CTkFont(weight="bold"))
-            header_label.grid(row=0, column=i, padx=1, pady=1, sticky="ew")
+        # --- LINHA 0: Informações Superiores (Nível e Mês) ---
+        # Nível acima do Nome
+        ctk.CTkLabel(self.chamada_scroll_frame, text=nivel_turma, font=ctk.CTkFont(size=12, weight="bold"), text_color="gray").grid(row=0, column=0, padx=5, pady=(5,0), sticky="w")
+        
+        # Mês acima das Datas
+        qtd_datas = len(self.chamada_data['datas'])
+        if qtd_datas > 0:
+            ctk.CTkLabel(self.chamada_scroll_frame, text=mes_atual, font=ctk.CTkFont(size=12, weight="bold"), text_color="gray").grid(row=0, column=1, columnspan=qtd_datas, pady=(5,0), sticky="ew")
 
-        # Cria as linhas para cada aluno
-        for row_idx, aluno in enumerate(self.chamada_data['alunos'], start=1):
+        # --- LINHA 1: Cabeçalhos da Tabela ---
+        ctk.CTkLabel(self.chamada_scroll_frame, text="Nome", font=ctk.CTkFont(weight="bold")).grid(row=1, column=0, padx=1, pady=1, sticky="ew")
+        
+        headers_datas = [d.split('/')[0] for d in self.chamada_data['datas']]
+        for i, dia in enumerate(headers_datas):
+            ctk.CTkLabel(self.chamada_scroll_frame, text=dia, font=ctk.CTkFont(weight="bold")).grid(row=1, column=i+1, padx=1, pady=1, sticky="ew")
+
+        # --- LINHA 2+: Dados dos Alunos ---
+        for row_idx, aluno in enumerate(self.chamada_data['alunos'], start=2):
             nome_aluno = aluno['Nome']
             
-            # Label do Nível
-            nivel_label = ctk.CTkLabel(self.chamada_scroll_frame, text=aluno['Nível'])
-            nivel_label.grid(row=row_idx, column=0, padx=(5,1), pady=1)
-
-            # Label do Nome
+            # Label do Nome (Coluna 0)
             nome_label = ctk.CTkLabel(self.chamada_scroll_frame, text=nome_aluno, anchor="w")
-            nome_label.grid(row=row_idx, column=1, padx=1, pady=1, sticky="ew")
+            nome_label.grid(row=row_idx, column=0, padx=5, pady=1, sticky="ew")
 
             self.chamada_widgets[nome_aluno] = {}
 
-            # Botões de status
-            for col_idx, data_str in enumerate(self.chamada_data['datas'], start=2):
+            # Botões de status (Colunas 1 em diante)
+            for col_idx, data_str in enumerate(self.chamada_data['datas'], start=1):
                 valor_registrado = aluno.get(data_str, "")
                 
                 estado_inicial = 0
@@ -1372,12 +1397,55 @@ class App(ctk.CTk):
         # Restaura o label usando as configurações originais (assumindo coluna 0)
         self.carregar_lista_turmas() # Recarrega para garantir consistência visual e de dados
 
+    def _propagar_edicao_para_alunos(self, old_turma, old_horario, old_professor, campo_editado, novo_valor):
+        """Atualiza os alunos que pertencem à turma editada."""
+        try:
+            # Garante que temos a lista completa de alunos para buscar quem atualizar
+            # Se o cache estiver vazio, busca do servidor
+            if not self.all_students_data:
+                response = requests.get(f"{API_BASE_URL}/api/all-alunos")
+                response.raise_for_status()
+                self.all_students_data = response.json()
+
+            # Filtra os alunos que pertencem à turma ANTIGA (antes da edição)
+            alunos_afetados = [
+                a for a in self.all_students_data 
+                if a.get('Turma') == old_turma and 
+                   a.get('Horário') == old_horario and 
+                   a.get('Professor') == old_professor
+            ]
+
+            # Atualiza cada aluno encontrado
+            for aluno in alunos_afetados:
+                # Atualiza o campo no objeto local
+                aluno[campo_editado] = novo_valor
+                
+                # Envia atualização para a API
+                nome = aluno.get('Nome')
+                if nome:
+                    try:
+                        encoded_name = quote(nome)
+                        requests.put(f"{API_BASE_URL}/api/aluno/{encoded_name}", json=aluno)
+                    except Exception:
+                        pass # Continua para o próximo aluno mesmo se um falhar
+
+            # Invalida o cache para forçar recarregamento na UI quando o usuário for para a aba Alunos
+            self.all_students_data = None
+            
+        except Exception as e:
+            print(f"Erro na propagação de edição: {e}")
+
     def _salvar_edicao_celula(self, entry_widget, turma_info, label_widget, campo):
         """Envia o novo valor para a API."""
         novo_valor = entry_widget.get()
         
         endpoint = ""
         request_kwargs = {}
+
+        # Captura valores antigos para identificar os alunos a serem atualizados
+        old_turma = turma_info.get("Turma") or ""
+        old_horario = turma_info.get("Horário") or ""
+        old_professor = turma_info.get("Professor") or ""
 
         if campo == "Nível":
             # Endpoint específico existente para nível
@@ -1414,6 +1482,11 @@ class App(ctk.CTk):
             response = requests.put(f"{API_BASE_URL}{endpoint}", **request_kwargs)
             response.raise_for_status()
             
+            # --- PROPAGAÇÃO: Atualiza os alunos desta turma em background ---
+            self.run_in_thread(lambda: self._propagar_edicao_para_alunos(
+                old_turma, old_horario, old_professor, campo, novo_valor
+            ))
+
             # Sucesso: Recarrega a lista para mostrar o dado atualizado e restaurar a UI
             self.carregar_lista_turmas()
             self.carregar_filtros_iniciais() # Atualiza filtros se mudou algo relevante
@@ -1593,12 +1666,14 @@ class AddStudentToplevel(ctk.CTkToplevel):
 
     def _on_close(self):
         """Libera o foco e destrói a janela, limpando a referência na aplicação principal."""
-        self.master_app.window_geometries["add_student"] = self.geometry() # Salva geometria ao fechar
+        try:
+            self.master_app.window_geometries["add_student"] = self.geometry() # Salva geometria ao fechar
+        except Exception:
+            pass
         self.grab_release()
         self.destroy()
         self.master_app.add_student_toplevel = None # Limpa a referência na app principal
         self.master_app.edit_student_toplevel = None
-        self.master_app.window_geometries["add_student"] = self.geometry() # Salva geometria ao fechar
 
     def _build_form(self):
         """Constrói todos os widgets dentro do formulário."""
