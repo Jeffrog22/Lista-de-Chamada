@@ -293,6 +293,7 @@ class App(ctk.CTk):
         self.sidebar_is_open = True
         meses = [datetime(2000, i, 1).strftime('%B') for i in range(1, 13)]
         self.alunos_sort_state = [] # Lista de dicionários para histórico de ordenação: [{'key': 'Nome', 'reverse': False}, ...]
+        self.chamada_sort_reverse = False # Controle de ordenação da chamada
         self.alunos_filter_state = {} # Para filtros por coluna
         self.chamada_data = {} # Guarda os dados da API
         self.turmas_filter_state = {} # Estado dos filtros da aba Turmas
@@ -590,11 +591,19 @@ class App(ctk.CTk):
             ctk.CTkLabel(self.chamada_scroll_frame, text=mes_atual, font=ctk.CTkFont(size=12, weight="bold"), text_color="gray").grid(row=0, column=1, columnspan=qtd_datas, pady=(5,0), sticky="ew")
 
         # --- LINHA 1: Cabeçalhos da Tabela ---
-        ctk.CTkLabel(self.chamada_scroll_frame, text="Nome", font=ctk.CTkFont(weight="bold")).grid(row=1, column=0, padx=1, pady=1, sticky="ew")
+        lbl_nome = ctk.CTkLabel(self.chamada_scroll_frame, text="Nome", font=ctk.CTkFont(weight="bold"))
+        lbl_nome.grid(row=1, column=0, padx=1, pady=1, sticky="ew")
+        lbl_nome.bind("<Double-Button-1>", self.ordenar_chamada_por_nome)
         
         headers_datas = [d.split('/')[0] for d in self.chamada_data['datas']]
         for i, dia in enumerate(headers_datas):
             ctk.CTkLabel(self.chamada_scroll_frame, text=dia, font=ctk.CTkFont(weight="bold")).grid(row=1, column=i+1, padx=1, pady=1, sticky="ew")
+        
+        # Cabeçalhos para as colunas de ação (Lixeira e Anotação)
+        col_trash = len(headers_datas) + 1
+        col_note = len(headers_datas) + 2
+        ctk.CTkLabel(self.chamada_scroll_frame, text="", width=20).grid(row=1, column=col_trash, padx=1, pady=1)
+        ctk.CTkLabel(self.chamada_scroll_frame, text="", width=30).grid(row=1, column=col_note, padx=1, pady=1)
 
         # --- LINHA 2+: Dados dos Alunos ---
         for row_idx, aluno in enumerate(self.chamada_data['alunos'], start=2):
@@ -605,10 +614,18 @@ class App(ctk.CTk):
             nome_label.grid(row=row_idx, column=0, padx=5, pady=1, sticky="ew")
 
             self.chamada_widgets[nome_aluno] = {}
+            
+            # Contadores para lógica de ativação dos botões
+            count_f = 0
+            count_j = 0
 
             # Botões de status (Colunas 1 em diante)
             for col_idx, data_str in enumerate(self.chamada_data['datas'], start=1):
                 valor_registrado = aluno.get(data_str, "")
+                
+                # Contabiliza faltas e justificativas
+                if valor_registrado == 'f': count_f += 1
+                if valor_registrado == 'j': count_j += 1
                 
                 estado_inicial = 0
                 for k, v in STATUS_MAP.items():
@@ -632,6 +649,28 @@ class App(ctk.CTk):
                 btn.grid(row=row_idx, column=col_idx, padx=1, pady=1)
 
                 self.chamada_widgets[nome_aluno][data_str] = {"var": status_var, "btn": btn}
+            
+            # --- Botão Lixeira (Exclusão) ---
+            # Ativo apenas se tiver 3 ou mais faltas ('f')
+            is_trash_active = count_f >= 3
+            btn_trash = ctk.CTkButton(self.chamada_scroll_frame, text="🗑️", width=20,
+                                      fg_color="#E74C3C" if is_trash_active else "transparent",
+                                      text_color="white" if is_trash_active else "gray",
+                                      state="normal" if is_trash_active else "disabled",
+                                      hover_color="#c0392b" if is_trash_active else None,
+                                      command=lambda a=aluno: self.confirmar_exclusao_aluno(a))
+            btn_trash.grid(row=row_idx, column=col_trash, padx=2, pady=1)
+
+            # --- Botão Anotação (Justificativa) ---
+            # Ativo apenas se tiver pelo menos uma justificativa ('j')
+            is_note_active = count_j > 0
+            btn_note = ctk.CTkButton(self.chamada_scroll_frame, text="📝", width=30,
+                                     fg_color="#F39C12" if is_note_active else "transparent",
+                                     text_color="white" if is_note_active else "gray",
+                                     state="normal" if is_note_active else "disabled",
+                                     hover_color="#d35400" if is_note_active else None,
+                                     command=lambda a=aluno: self.abrir_anotacoes(a))
+            btn_note.grid(row=row_idx, column=col_note, padx=2, pady=1)
 
     def mudar_status(self, status_var, btn_widget):
         """Cicla entre os status quando um botão é clicado."""
@@ -643,6 +682,103 @@ class App(ctk.CTk):
         btn_widget.configure(text=novo_estilo["text"], 
                              fg_color=novo_estilo["fg_color"],
                              hover_color=novo_estilo["hover_color"])
+
+    def ordenar_chamada_por_nome(self, event=None):
+        """Ordena a lista de chamada pelo nome ao dar duplo clique no cabeçalho."""
+        if not self.chamada_data or 'alunos' not in self.chamada_data:
+            return
+
+        # 1. Salva o estado atual dos botões (presença) antes de reordenar
+        for aluno in self.chamada_data['alunos']:
+            nome = aluno.get('Nome')
+            if nome in self.chamada_widgets:
+                for data_str, widget_info in self.chamada_widgets[nome].items():
+                    status_id = widget_info["var"].get()
+                    code = STATUS_MAP[status_id]["code"]
+                    aluno[data_str] = code
+
+        # 2. Alterna a ordenação e ordena a lista
+        self.chamada_sort_reverse = not self.chamada_sort_reverse
+        self.chamada_data['alunos'].sort(key=lambda x: x.get('Nome', '').lower(), reverse=self.chamada_sort_reverse)
+
+        # 3. Limpa e reconstrói o grid
+        for widget in self.chamada_scroll_frame.winfo_children():
+            widget.destroy()
+        self.construir_grid()
+
+    def confirmar_exclusao_aluno(self, aluno):
+        """Confirma e exclui o aluno se tiver 3 ou mais faltas."""
+        msg = "Aviso: O aluno excluído poderá ser consultado na lista de exclusão. Tem certeza desta exclusão?"
+        if messagebox.askyesno("Confirmar Exclusão", msg, icon='warning'):
+            self.excluir_aluno(aluno)
+
+    def excluir_aluno(self, aluno):
+        """Envia requisição para excluir o aluno."""
+        nome = aluno.get('Nome')
+        if not nome: return
+        try:
+            encoded_name = quote(nome)
+            response = requests.delete(f"{API_BASE_URL}/api/aluno/{encoded_name}")
+            response.raise_for_status()
+            messagebox.showinfo("Sucesso", f"Aluno {nome} excluído com sucesso.")
+            self.iniciar_busca_alunos() # Atualiza a lista
+        except requests.exceptions.RequestException as e:
+            messagebox.showerror("Erro", f"Erro ao excluir aluno: {e}")
+
+    def abrir_anotacoes(self, aluno):
+        """Abre um card de anotações à direita para o aluno."""
+        # Cria uma janela Toplevel
+        top = ctk.CTkToplevel(self)
+        top.title(f"Anotações - {aluno.get('Nome')}")
+        top.geometry("320x400")
+        top.transient(self)
+        
+        # Posiciona à direita da janela principal
+        self.update_idletasks()
+        x = self.winfo_x() + self.winfo_width() + 10
+        y = self.winfo_y()
+        top.geometry(f"+{x}+{y}")
+        
+        ctk.CTkLabel(top, text=f"Justificativas: {aluno.get('Nome')}", font=ctk.CTkFont(weight="bold")).pack(pady=(15, 10))
+        
+        # Frame de entrada
+        input_frame = ctk.CTkFrame(top)
+        input_frame.pack(padx=10, pady=5, fill="x")
+        
+        ctk.CTkLabel(input_frame, text="Cód (00):").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        entry_cod = ctk.CTkEntry(input_frame, width=60, placeholder_text="00")
+        entry_cod.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+        
+        ctk.CTkLabel(input_frame, text="Justificativa:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        entry_just = ctk.CTkEntry(input_frame, width=200, placeholder_text="Descrição...")
+        entry_just.grid(row=1, column=1, padx=5, pady=5, sticky="w")
+        
+        def salvar_nota():
+            cod = entry_cod.get()
+            just = entry_just.get()
+            if not cod or not just:
+                messagebox.showwarning("Aviso", "Preencha o código e a justificativa.", parent=top)
+                return
+            
+            # Adiciona visualmente ao histórico (simulação de salvamento)
+            nova_nota = f"{cod} - {just}"
+            text_box.configure(state="normal")
+            text_box.insert("end", f"{nova_nota}\n")
+            text_box.configure(state="disabled")
+            entry_cod.delete(0, "end")
+            entry_just.delete(0, "end")
+
+        ctk.CTkButton(input_frame, text="Salvar Anotação", command=salvar_nota).grid(row=2, column=0, columnspan=2, pady=10)
+        
+        # Área de visualização das notas existentes
+        ctk.CTkLabel(top, text="Histórico:", anchor="w").pack(padx=10, pady=(10, 0), anchor="w")
+        text_box = ctk.CTkTextbox(top, height=200)
+        text_box.pack(padx=10, pady=5, fill="both", expand=True)
+        
+        # Carrega notas existentes se houver (campo 'Justificativas' ou similar)
+        if aluno.get('Justificativas'):
+            text_box.insert("0.0", aluno.get('Justificativas'))
+        text_box.configure(state="disabled")
 
     def iniciar_salvar_chamada(self):
         self.chamada_info_label.configure(text="Salvando...")
