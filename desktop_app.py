@@ -645,7 +645,7 @@ class App(ctk.CTk):
                                     font=ctk.CTkFont(weight="bold"))
                 
                 # A função de callback precisa de 'lambda' para capturar os valores corretos
-                btn.configure(command=lambda v=status_var, b=btn: self.mudar_status(v, b))
+                btn.configure(command=lambda v=status_var, b=btn, n=nome_aluno: self.mudar_status(v, b, n))
                 btn.grid(row=row_idx, column=col_idx, padx=1, pady=1)
 
                 self.chamada_widgets[nome_aluno][data_str] = {"var": status_var, "btn": btn}
@@ -653,26 +653,30 @@ class App(ctk.CTk):
             # --- Botão Lixeira (Exclusão) ---
             # Ativo apenas se tiver 3 ou mais faltas ('f')
             is_trash_active = count_f >= 3
-            btn_trash = ctk.CTkButton(self.chamada_scroll_frame, text="🗑️", width=20,
+            btn_trash = ctk.CTkButton(self.chamada_scroll_frame, text="\uE74D", width=20,
+                                      font=ctk.CTkFont(family="Segoe MDL2 Assets", size=12),
                                       fg_color="#E74C3C" if is_trash_active else "transparent",
                                       text_color="white" if is_trash_active else "gray",
                                       state="normal" if is_trash_active else "disabled",
-                                      hover_color="#c0392b" if is_trash_active else None,
+                                      hover_color="#c0392b",
                                       command=lambda a=aluno: self.confirmar_exclusao_aluno(a))
             btn_trash.grid(row=row_idx, column=col_trash, padx=2, pady=1)
 
             # --- Botão Anotação (Justificativa) ---
             # Ativo apenas se tiver pelo menos uma justificativa ('j')
             is_note_active = count_j > 0
-            btn_note = ctk.CTkButton(self.chamada_scroll_frame, text="📝", width=30,
+            btn_note = ctk.CTkButton(self.chamada_scroll_frame, text="📝", width=20,
                                      fg_color="#F39C12" if is_note_active else "transparent",
                                      text_color="white" if is_note_active else "gray",
                                      state="normal" if is_note_active else "disabled",
-                                     hover_color="#d35400" if is_note_active else None,
+                                     hover_color="#d35400",
                                      command=lambda a=aluno: self.abrir_anotacoes(a))
             btn_note.grid(row=row_idx, column=col_note, padx=2, pady=1)
 
-    def mudar_status(self, status_var, btn_widget):
+            # Armazena os botões de ação para atualização em tempo real
+            self.chamada_widgets[nome_aluno]["actions"] = {"trash": btn_trash, "note": btn_note}
+
+    def mudar_status(self, status_var, btn_widget, nome_aluno):
         """Cicla entre os status quando um botão é clicado."""
         novo_status_id = (status_var.get() + 1) % len(STATUS_MAP)
         status_var.set(novo_status_id)
@@ -682,6 +686,43 @@ class App(ctk.CTk):
         btn_widget.configure(text=novo_estilo["text"], 
                              fg_color=novo_estilo["fg_color"],
                              hover_color=novo_estilo["hover_color"])
+        
+        self._atualizar_estado_botoes_acao(nome_aluno)
+
+    def _atualizar_estado_botoes_acao(self, nome_aluno):
+        """Recalcula faltas e justificativas para ativar/desativar botões de ação em tempo real (incluindo desfazer)."""
+        if nome_aluno not in self.chamada_widgets: return
+        
+        widgets = self.chamada_widgets[nome_aluno]
+        count_f = 0
+        count_j = 0
+        
+        for key, val in widgets.items():
+            if key == "actions": continue
+            status_id = val["var"].get()
+            code = STATUS_MAP[status_id]["code"]
+            if code == 'f': count_f += 1
+            if code == 'j': count_j += 1
+            
+        actions = widgets.get("actions", {})
+        btn_trash = actions.get("trash")
+        btn_note = actions.get("note")
+        
+        if btn_trash:
+            # Lógica da Lixeira: Ativa se >= 3 faltas. Desativa imediatamente se corrigir para menos.
+            is_active = count_f >= 3
+            btn_trash.configure(state="normal" if is_active else "disabled",
+                                fg_color="#E74C3C" if is_active else "transparent",
+                                text_color="white" if is_active else "gray",
+                                hover_color="#c0392b")
+
+        if btn_note:
+            # Lógica da Nota: Ativa se tiver pelo menos 1 justificativa ('j'). Independente da lixeira.
+            is_active = count_j > 0
+            btn_note.configure(state="normal" if is_active else "disabled",
+                               fg_color="#F39C12" if is_active else "transparent",
+                               text_color="white" if is_active else "gray",
+                               hover_color="#d35400")
 
     def ordenar_chamada_por_nome(self, event=None):
         """Ordena a lista de chamada pelo nome ao dar duplo clique no cabeçalho."""
@@ -693,6 +734,7 @@ class App(ctk.CTk):
             nome = aluno.get('Nome')
             if nome in self.chamada_widgets:
                 for data_str, widget_info in self.chamada_widgets[nome].items():
+                    if data_str == "actions": continue
                     status_id = widget_info["var"].get()
                     code = STATUS_MAP[status_id]["code"]
                     aluno[data_str] = code
@@ -745,7 +787,7 @@ class App(ctk.CTk):
         input_frame = ctk.CTkFrame(top)
         input_frame.pack(padx=10, pady=5, fill="x")
         
-        ctk.CTkLabel(input_frame, text="Cód (00):").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        ctk.CTkLabel(input_frame, text="Dia (00):").grid(row=0, column=0, padx=5, pady=5, sticky="w")
         entry_cod = ctk.CTkEntry(input_frame, width=60, placeholder_text="00")
         entry_cod.grid(row=0, column=1, padx=5, pady=5, sticky="w")
         
@@ -801,6 +843,7 @@ class App(ctk.CTk):
 
             data_widgets = self.chamada_widgets[nome_aluno]
             for data_str, widget_info in data_widgets.items():
+                if data_str == "actions": continue
                 status_id = widget_info["var"].get()
                 status_code = STATUS_MAP[status_id]["code"]
                 if status_code:  # Salva apenas se houver um status definido (não vazio)
