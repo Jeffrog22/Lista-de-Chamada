@@ -311,6 +311,7 @@ class App(ctk.CTk):
         self.last_student_add_data = {} # Guarda os últimos dados para preenchimento
         self.alunos_grid_resizers = [] # Lista para guardar os widgets de redimensionamento
         self.window_geometries = {} # Cache para geometria das janelas (Toplevels)
+        self.chamada_undo_stack = [] # Pilha para desfazer ações na chamada
         
         # Mapeamento de views para seus frames de controle
         self.control_frames = {
@@ -557,6 +558,7 @@ class App(ctk.CTk):
     def construir_grid(self):
         """Cria a tabela de chamada com base nos dados recebidos."""
         self.chamada_widgets = {}
+        self.chamada_undo_stack = [] # Reseta a pilha de desfazer ao reconstruir
         
         # Tenta obter o nível atualizado a partir da lista de turmas (cache) para garantir precisão
         nivel_turma = ""
@@ -585,10 +587,28 @@ class App(ctk.CTk):
         # Nível acima do Nome
         ctk.CTkLabel(self.chamada_scroll_frame, text=nivel_turma, font=ctk.CTkFont(size=12, weight="bold"), text_color="gray").grid(row=0, column=0, padx=5, pady=(5,0), sticky="w")
         
-        # Mês acima das Datas
         qtd_datas = len(self.chamada_data['datas'])
+        col_trash = qtd_datas + 1
+        col_note = qtd_datas + 2
+
+        # Mês acima das Datas
         if qtd_datas > 0:
             ctk.CTkLabel(self.chamada_scroll_frame, text=mes_atual, font=ctk.CTkFont(size=12, weight="bold"), text_color="gray").grid(row=0, column=1, columnspan=qtd_datas, pady=(5,0), sticky="ew")
+
+        # --- Botões de Controle (Limpar e Desfazer) na Linha 0 ---
+        self.btn_limpar_chamada = ctk.CTkButton(self.chamada_scroll_frame, text="🧹", width=25, height=25,
+                                                fg_color="transparent", hover_color="#bdc3c7", text_color="gray",
+                                                font=ctk.CTkFont(size=12),
+                                                command=self.limpar_chamada_atual)
+        self.btn_limpar_chamada.grid(row=0, column=col_trash, padx=1, pady=(5,0))
+        
+        self.btn_desfazer = ctk.CTkButton(self.chamada_scroll_frame, text="\uE7A7", width=25, height=25,
+                                          fg_color="transparent", hover_color="#bdc3c7", 
+                                          text_color=("gray10", "gray90"), text_color_disabled="gray",
+                                          font=ctk.CTkFont(family="Segoe MDL2 Assets", size=12),
+                                          state="disabled",
+                                          command=self.desfazer_ultima_acao)
+        self.btn_desfazer.grid(row=0, column=col_note, padx=1, pady=(5,0))
 
         # --- LINHA 1: Cabeçalhos da Tabela ---
         lbl_nome = ctk.CTkLabel(self.chamada_scroll_frame, text="Nome", font=ctk.CTkFont(weight="bold"))
@@ -599,9 +619,6 @@ class App(ctk.CTk):
         for i, dia in enumerate(headers_datas):
             ctk.CTkLabel(self.chamada_scroll_frame, text=dia, font=ctk.CTkFont(weight="bold")).grid(row=1, column=i+1, padx=1, pady=1, sticky="ew")
         
-        # Cabeçalhos para as colunas de ação (Lixeira e Anotação)
-        col_trash = len(headers_datas) + 1
-        col_note = len(headers_datas) + 2
         ctk.CTkLabel(self.chamada_scroll_frame, text="", width=20).grid(row=1, column=col_trash, padx=1, pady=1)
         ctk.CTkLabel(self.chamada_scroll_frame, text="", width=30).grid(row=1, column=col_note, padx=1, pady=1)
 
@@ -641,11 +658,12 @@ class App(ctk.CTk):
                                     fg_color=STATUS_MAP[estado_inicial]["fg_color"],
                                     hover_color=STATUS_MAP[estado_inicial]["hover_color"],
                                     width=35, # Largura fixa para evitar o reajuste
+                                    height=25, # Altura fixa para evitar tremores
                                     text_color="white",
                                     font=ctk.CTkFont(weight="bold"))
                 
                 # A função de callback precisa de 'lambda' para capturar os valores corretos
-                btn.configure(command=lambda v=status_var, b=btn, n=nome_aluno: self.mudar_status(v, b, n))
+                btn.configure(command=lambda v=status_var, b=btn, n=nome_aluno, d=data_str: self.mudar_status(v, b, n, d))
                 btn.grid(row=row_idx, column=col_idx, padx=1, pady=1)
 
                 self.chamada_widgets[nome_aluno][data_str] = {"var": status_var, "btn": btn}
@@ -653,7 +671,7 @@ class App(ctk.CTk):
             # --- Botão Lixeira (Exclusão) ---
             # Ativo apenas se tiver 3 ou mais faltas ('f')
             is_trash_active = count_f >= 3
-            btn_trash = ctk.CTkButton(self.chamada_scroll_frame, text="\uE74D", width=20,
+            btn_trash = ctk.CTkButton(self.chamada_scroll_frame, text="\uE74D", width=20, height=25,
                                       font=ctk.CTkFont(family="Segoe MDL2 Assets", size=12),
                                       fg_color="#E74C3C" if is_trash_active else "transparent",
                                       text_color="white" if is_trash_active else "gray",
@@ -665,7 +683,7 @@ class App(ctk.CTk):
             # --- Botão Anotação (Justificativa) ---
             # Ativo apenas se tiver pelo menos uma justificativa ('j')
             is_note_active = count_j > 0
-            btn_note = ctk.CTkButton(self.chamada_scroll_frame, text="📝", width=20,
+            btn_note = ctk.CTkButton(self.chamada_scroll_frame, text="📝", width=20, height=25,
                                      fg_color="#F39C12" if is_note_active else "transparent",
                                      text_color="white" if is_note_active else "gray",
                                      state="normal" if is_note_active else "disabled",
@@ -676,18 +694,87 @@ class App(ctk.CTk):
             # Armazena os botões de ação para atualização em tempo real
             self.chamada_widgets[nome_aluno]["actions"] = {"trash": btn_trash, "note": btn_note}
 
-    def mudar_status(self, status_var, btn_widget, nome_aluno):
-        """Cicla entre os status quando um botão é clicado."""
-        novo_status_id = (status_var.get() + 1) % len(STATUS_MAP)
-        status_var.set(novo_status_id)
+    def _aplicar_status_visual(self, status_id, btn_widget):
+        """Atualiza visualmente o botão de status."""
+        estilo = STATUS_MAP[status_id]
+        btn_widget.configure(text=estilo["text"], 
+                             fg_color=estilo["fg_color"],
+                             hover_color=estilo["hover_color"])
 
-        # Atualiza a aparência do botão
-        novo_estilo = STATUS_MAP[novo_status_id]
-        btn_widget.configure(text=novo_estilo["text"], 
-                             fg_color=novo_estilo["fg_color"],
-                             hover_color=novo_estilo["hover_color"])
+    def _registrar_undo(self, action_data):
+        """Registra uma ação na pilha de desfazer."""
+        self.chamada_undo_stack.append(action_data)
+        if hasattr(self, 'btn_desfazer'):
+            self.btn_desfazer.configure(state="normal")
+
+    def limpar_chamada_atual(self):
+        """Limpa todos os status da chamada atual."""
+        if not self.chamada_widgets: return
         
+        changes = []
+        for nome, dados in self.chamada_widgets.items():
+            for data_str, widget_info in dados.items():
+                if data_str == "actions": continue
+                
+                current_val = widget_info["var"].get()
+                if current_val != 0:
+                    changes.append({
+                        'aluno': nome,
+                        'data': data_str,
+                        'prev_val': current_val
+                    })
+
+        if not changes:
+            messagebox.showinfo("Info", "A chamada já está limpa.")
+            return
+
+        if not messagebox.askyesno("Limpar Chamada", "Deseja limpar todos os registros desta chamada?"):
+            return
+
+        for item in changes:
+            w_info = self.chamada_widgets[item['aluno']][item['data']]
+            w_info["var"].set(0)
+            self._aplicar_status_visual(0, w_info["btn"])
+        
+        affected_students = set(item['aluno'] for item in changes)
+        for aluno in affected_students:
+            self._atualizar_estado_botoes_acao(aluno)
+
+        self._registrar_undo({'type': 'batch', 'changes': changes})
+
+    def desfazer_ultima_acao(self):
+        """Desfaz a última ação registrada."""
+        if not self.chamada_undo_stack: return
+        
+        action = self.chamada_undo_stack.pop()
+        
+        if action['type'] == 'single':
+            self._reverter_item(action['aluno'], action['data'], action['prev_val'])
+        elif action['type'] == 'batch':
+            for item in action['changes']:
+                self._reverter_item(item['aluno'], item['data'], item['prev_val'])
+        
+        if not self.chamada_undo_stack:
+            self.btn_desfazer.configure(state="disabled")
+
+    def mudar_status(self, status_var, btn_widget, nome_aluno, data_str):
+        """Cicla entre os status quando um botão é clicado."""
+        old_status_id = status_var.get()
+        novo_status_id = (old_status_id + 1) % len(STATUS_MAP)
+        
+        self._registrar_undo({'type': 'single', 'aluno': nome_aluno, 'data': data_str, 'prev_val': old_status_id})
+        
+        status_var.set(novo_status_id)
+        self._aplicar_status_visual(novo_status_id, btn_widget)
         self._atualizar_estado_botoes_acao(nome_aluno)
+
+    def _reverter_item(self, nome, data, prev_val):
+        """Reverte um item específico para o valor anterior."""
+        if nome in self.chamada_widgets and data in self.chamada_widgets[nome]:
+            w_info = self.chamada_widgets[nome][data]
+            w_info["var"].set(prev_val)
+            self._aplicar_status_visual(prev_val, w_info["btn"])
+            self._atualizar_estado_botoes_acao(nome)
 
     def _atualizar_estado_botoes_acao(self, nome_aluno):
         """Recalcula faltas e justificativas para ativar/desativar botões de ação em tempo real (incluindo desfazer)."""
@@ -768,18 +855,15 @@ class App(ctk.CTk):
             messagebox.showerror("Erro", f"Erro ao excluir aluno: {e}")
 
     def abrir_anotacoes(self, aluno):
-        """Abre um card de anotações à direita para o aluno."""
+        """Abre um card de anotações centralizado para o aluno."""
         # Cria uma janela Toplevel
         top = ctk.CTkToplevel(self)
         top.title(f"Anotações - {aluno.get('Nome')}")
         top.geometry("320x400")
         top.transient(self)
         
-        # Posiciona à direita da janela principal
-        self.update_idletasks()
-        x = self.winfo_x() + self.winfo_width() + 10
-        y = self.winfo_y()
-        top.geometry(f"+{x}+{y}")
+        # Centraliza a janela
+        self.after(10, lambda: self._center_toplevel(top))
         
         ctk.CTkLabel(top, text=f"Justificativas: {aluno.get('Nome')}", font=ctk.CTkFont(weight="bold")).pack(pady=(15, 10))
         
@@ -802,18 +886,49 @@ class App(ctk.CTk):
                 messagebox.showwarning("Aviso", "Preencha o código e a justificativa.", parent=top)
                 return
             
-            # Adiciona visualmente ao histórico (simulação de salvamento)
-            nova_nota = f"{cod} - {just}"
-            text_box.configure(state="normal")
-            text_box.insert("end", f"{nova_nota}\n")
-            text_box.configure(state="disabled")
-            entry_cod.delete(0, "end")
-            entry_just.delete(0, "end")
+            # Constrói a data completa usando o ano e mês vigentes
+            hoje = datetime.now()
+            try:
+                dia = int(cod)
+                data_completa = datetime(hoje.year, hoje.month, dia).strftime("%d/%m/%Y")
+            except ValueError:
+                messagebox.showwarning("Erro", "Dia inválido.", parent=top)
+                return
+
+            payload = {
+                "Nome": aluno.get('Nome'),
+                "Data": data_completa,
+                "Motivo": just
+            }
+
+            try:
+                response = requests.post(f"{API_BASE_URL}/api/justificativa", json=payload)
+                response.raise_for_status()
+                
+                nova_nota = f"{cod.zfill(2)} - {just}"
+                text_box.configure(state="normal")
+                text_box.insert("end", f"{nova_nota}\n")
+                text_box.configure(state="disabled")
+                
+                # Atualiza o objeto aluno localmente para persistência visual sem recarregar
+                if aluno.get('Justificativas'):
+                    aluno['Justificativas'] += f"\n{nova_nota}"
+                else:
+                    aluno['Justificativas'] = nova_nota
+
+                entry_cod.delete(0, "end")
+                entry_just.delete(0, "end")
+            except requests.exceptions.RequestException as e:
+                messagebox.showerror("Erro", f"Erro ao salvar justificativa: {e}", parent=top)
 
         ctk.CTkButton(input_frame, text="Salvar Anotação", command=salvar_nota).grid(row=2, column=0, columnspan=2, pady=10)
         
         # Área de visualização das notas existentes
-        ctk.CTkLabel(top, text="Histórico:", anchor="w").pack(padx=10, pady=(10, 0), anchor="w")
+        meses_pt = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Junho',
+                    7: 'Julho', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
+        mes_atual = meses_pt.get(datetime.now().month, '')
+        
+        ctk.CTkLabel(top, text=f"Histórico ({mes_atual}):", anchor="w").pack(padx=10, pady=(10, 0), anchor="w")
         text_box = ctk.CTkTextbox(top, height=200)
         text_box.pack(padx=10, pady=5, fill="both", expand=True)
         
@@ -846,8 +961,7 @@ class App(ctk.CTk):
                 if data_str == "actions": continue
                 status_id = widget_info["var"].get()
                 status_code = STATUS_MAP[status_id]["code"]
-                if status_code:  # Salva apenas se houver um status definido (não vazio)
-                    payload["registros"].setdefault(nome_aluno, {})[data_str] = status_code
+                payload["registros"].setdefault(nome_aluno, {})[data_str] = status_code
 
         if not payload["registros"]:
             messagebox.showinfo("Informação", "Nenhuma alteração detectada para salvar.")
