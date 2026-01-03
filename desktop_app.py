@@ -175,7 +175,7 @@ class App(ctk.CTk):
         # --- 1. SIDEBAR (PAINEL LATERAL) ---
         self.sidebar_frame = ctk.CTkFrame(self, width=250, corner_radius=0)
         self.sidebar_frame.grid(row=1, column=0, sticky="nsew") # Movido para a linha 1
-        self.sidebar_frame.grid_rowconfigure(5, weight=1) # Espaço para empurrar o botão de salvar para baixo
+        self.sidebar_frame.grid_rowconfigure(0, weight=1) # Permite que os frames internos expandam
 
         # --- 1.1. Frame do Menu Principal (visível no início) ---
         self.main_menu_frame = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
@@ -188,6 +188,10 @@ class App(ctk.CTk):
         for i, item in enumerate(menu_items, start=1):
             button = ctk.CTkButton(self.main_menu_frame, text=item, command=lambda v=item: self.show_view(v))
             button.grid(row=i, column=0, padx=20, pady=10, sticky="ew")
+        
+        # Botão Exclusões (sem ação definida por enquanto)
+        self.btn_exclusoes_main = ctk.CTkButton(self.main_menu_frame, text="Exclusões", command=lambda: self.show_view("Exclusões"), fg_color="transparent", border_width=1)
+        self.btn_exclusoes_main.grid(row=4, column=0, padx=20, pady=(20, 20), sticky="s")
             
         # --- 1.2. Frame do Menu de Controle da CHAMADA (inicialmente oculto) ---
         self.chamada_control_frame = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
@@ -209,6 +213,9 @@ class App(ctk.CTk):
         self.chamada_buscar_button.grid(row=5, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
         self.chamada_back_button = ctk.CTkButton(self.chamada_control_frame, text="< Voltar ao Menu", command=self.show_main_menu, fg_color="transparent", border_width=1)
         self.chamada_back_button.grid(row=7, column=0, columnspan=2, padx=20, pady=(20, 10), sticky="s")
+        
+        self.chamada_exclusoes_button = ctk.CTkButton(self.chamada_control_frame, text="Exclusões", command=lambda: self.show_view("Exclusões"), fg_color="transparent", border_width=1)
+        self.chamada_exclusoes_button.grid(row=8, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="s")
 
         # --- 2. ÁREA PRINCIPAL (MAIN CONTENT) ---
         self.main_content_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
@@ -223,6 +230,7 @@ class App(ctk.CTk):
 
         self.tab_view.add("Alunos")
         self.tab_view.add("Turmas")
+        self.tab_view.add("Exclusões")
         self.tab_view.set("Chamada") 
 
         # --- Botão Adicionar Aluno (canto superior direito, sobreposto) ---
@@ -288,6 +296,12 @@ class App(ctk.CTk):
         self.tab_view.tab("Turmas").grid_rowconfigure(0, weight=1)
         self.turmas_scroll_frame = ctk.CTkScrollableFrame(self.tab_view.tab("Turmas"), label_text="Lista de Turmas e Atalhos")
         self.turmas_scroll_frame.grid(row=0, column=0, sticky="nsew")
+
+        # --- 2.5. Conteúdo da Aba "Exclusões" ---
+        self.tab_view.tab("Exclusões").grid_columnconfigure(0, weight=1)
+        self.tab_view.tab("Exclusões").grid_rowconfigure(0, weight=1)
+        self.exclusoes_scroll_frame = ctk.CTkScrollableFrame(self.tab_view.tab("Exclusões"), label_text="Histórico de Exclusões")
+        self.exclusoes_scroll_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
 
         # --- ARMAZENAMENTO DE ESTADO ---
         self.sidebar_is_open = True
@@ -431,6 +445,10 @@ class App(ctk.CTk):
                 self.toggle_sidebar()
             # Mostra o botão de adicionar turma (posicionado à direita do menu hambúrguer)
             self.add_turma_button.place(relx=0.0, rely=0.0, x=70, y=10, anchor="nw")
+        elif view_name == "Exclusões":
+            self.carregar_lista_exclusoes()
+            if self.sidebar_is_open:
+                self.toggle_sidebar()
 
     def show_main_menu(self):
         """Mostra o menu principal e esconde os de controle."""
@@ -1796,6 +1814,74 @@ class App(ctk.CTk):
             messagebox.showerror("Erro", error_msg)
             self._cancelar_edicao_celula(entry_widget, label_widget)
 
+    # --- MÉTODOS PARA A ABA EXCLUSÕES ---
+    def carregar_lista_exclusoes(self):
+        """Busca a lista de alunos excluídos do backend."""
+        def _task():
+            try:
+                response = requests.get(f"{API_BASE_URL}/api/exclusoes")
+                response.raise_for_status()
+                data = response.json()
+                self.after(0, lambda: self.construir_grid_exclusoes(data))
+            except requests.exceptions.RequestException as e:
+                self.after(0, lambda err=e: self._exibir_erro_exclusoes(err))
+        self.run_in_thread(_task)
+
+    def _exibir_erro_exclusoes(self, error):
+        for widget in self.exclusoes_scroll_frame.winfo_children(): widget.destroy()
+        ctk.CTkLabel(self.exclusoes_scroll_frame, text=f"Erro ao carregar exclusões: {error}").pack(pady=20)
+
+    def construir_grid_exclusoes(self, alunos_excluidos):
+        """Constrói a tabela de alunos excluídos."""
+        for widget in self.exclusoes_scroll_frame.winfo_children():
+            widget.destroy()
+
+        if not alunos_excluidos:
+            ctk.CTkLabel(self.exclusoes_scroll_frame, text="Nenhum registro de exclusão encontrado.").pack(pady=20)
+            return
+
+        # Cabeçalhos
+        headers = ["Nome", "Turma", "Horário", "Professor", "Data Exclusão", "Ações"]
+        self.exclusoes_scroll_frame.grid_columnconfigure(0, weight=1) # Nome expande
+        self.exclusoes_scroll_frame.grid_columnconfigure((1,2,3,4), weight=0, minsize=100)
+        self.exclusoes_scroll_frame.grid_columnconfigure(5, weight=0, minsize=120)
+
+        for i, h in enumerate(headers):
+            ctk.CTkLabel(self.exclusoes_scroll_frame, text=h, font=ctk.CTkFont(weight="bold")).grid(row=0, column=i, padx=5, pady=5, sticky="ew")
+
+        meses_pt_abbr = {1: 'Jan', 2: 'Fev', 3: 'Mar', 4: 'Abr', 5: 'Mai', 6: 'Jun',
+                         7: 'Jul', 8: 'Ago', 9: 'Set', 10: 'Out', 11: 'Nov', 12: 'Dez'}
+
+        for idx, aluno in enumerate(alunos_excluidos, start=1):
+            # Formata Data de Exclusão (mmm/aaaa)
+            data_excl = aluno.get("Data Exclusão") or aluno.get("deleted_at")
+            data_fmt = "-"
+            if data_excl:
+                try:
+                    # Tenta parsear ISO ou formato padrão
+                    dt = datetime.fromisoformat(str(data_excl).replace('Z', ''))
+                    data_fmt = f"{meses_pt_abbr.get(dt.month, '')}/{dt.year}"
+                except ValueError:
+                    data_fmt = str(data_excl)
+
+            ctk.CTkLabel(self.exclusoes_scroll_frame, text=aluno.get("Nome", ""), anchor="w").grid(row=idx, column=0, padx=5, pady=2, sticky="ew")
+            ctk.CTkLabel(self.exclusoes_scroll_frame, text=aluno.get("Turma", ""), anchor="center").grid(row=idx, column=1, padx=5, pady=2)
+            ctk.CTkLabel(self.exclusoes_scroll_frame, text=aluno.get("Horário", ""), anchor="center").grid(row=idx, column=2, padx=5, pady=2)
+            ctk.CTkLabel(self.exclusoes_scroll_frame, text=aluno.get("Professor", ""), anchor="center").grid(row=idx, column=3, padx=5, pady=2)
+            ctk.CTkLabel(self.exclusoes_scroll_frame, text=data_fmt, anchor="center").grid(row=idx, column=4, padx=5, pady=2)
+
+            # Botões de Ação
+            actions_frame = ctk.CTkFrame(self.exclusoes_scroll_frame, fg_color="transparent")
+            actions_frame.grid(row=idx, column=5, padx=5, pady=2)
+
+            ctk.CTkButton(actions_frame, text="ver", width=40, height=22, font=ctk.CTkFont(size=11),
+                          fg_color="transparent", border_width=1,
+                          command=lambda a=aluno: self.open_view_student_window(a)).pack(side="left", padx=2)
+            
+            ctk.CTkButton(actions_frame, text="restaurar", width=60, height=22, font=ctk.CTkFont(size=11),
+                          fg_color="#2ECC71", hover_color="#27ae60", text_color="white",
+                          command=lambda a=aluno: self.open_restore_student_window(a)).pack(side="left", padx=2)
+
     # MODIFICADO: A lógica foi movida para a classe AddStudentToplevel
     def open_add_student_window(self):
         """Abre uma janela Toplevel para adicionar um novo aluno."""
@@ -1836,6 +1922,20 @@ class App(ctk.CTk):
             "professores": [rb.cget('text') for rb in self.chamada_prof_frame.winfo_children() if isinstance(rb, ctk.CTkRadioButton)],
         }
         self.edit_student_toplevel = AddStudentToplevel(self, form_data, self.on_student_added, edit_data=student_data)
+
+    def open_restore_student_window(self, student_data):
+        """Abre a janela de formulário em modo de restauração."""
+        if self.add_student_toplevel is not None and self.add_student_toplevel.winfo_exists():
+            self.add_student_toplevel.lift()
+            return
+
+        form_data = {
+            "turmas": self.chamada_turma_combo.cget('values'),
+            "horarios": self.chamada_horario_combo.cget('values'),
+            "professores": [rb.cget('text') for rb in self.chamada_prof_frame.winfo_children() if isinstance(rb, ctk.CTkRadioButton)],
+        }
+        self.add_student_toplevel = AddStudentToplevel(self, form_data, self.on_student_added, restore_data=student_data)
+
     def on_student_added(self, new_student_data):
         """Callback executado quando um aluno é adicionado com sucesso."""
         # 1. Salva os dados para persistência no próximo formulário
@@ -1849,6 +1949,12 @@ class App(ctk.CTk):
         self.all_students_data = None
         # 3. Muda para a aba de alunos e recarrega a lista
         self.show_view("Alunos")
+        # 3. Se estiver na aba de exclusões, recarrega ela também
+        if self.tab_view.get() == "Exclusões":
+            self.carregar_lista_exclusoes()
+        else:
+            # Muda para a aba de alunos e recarrega a lista
+            self.show_view("Alunos")
         # 4. Limpa a referência da janela Toplevel
         self.add_student_toplevel = None
         self.edit_student_toplevel = None
@@ -1925,16 +2031,20 @@ class App(ctk.CTk):
 
 # --- NOVA CLASSE PARA O FORMULÁRIO DE ADIÇÃO DE ALUNO ---
 class AddStudentToplevel(ctk.CTkToplevel):
-    def __init__(self, master, form_data, on_success_callback, edit_data=None):
+    def __init__(self, master, form_data, on_success_callback, edit_data=None, restore_data=None):
         super().__init__(master)
         self.master_app = master
         self.form_data = form_data
         self.on_success = on_success_callback
         self.edit_data = edit_data
+        self.restore_data = restore_data
         self.is_edit_mode = edit_data is not None
+        self.is_restore_mode = restore_data is not None
 
         if self.is_edit_mode:
             self.title(f"Editar Aluno - {edit_data.get('Nome', '')}")
+        elif self.is_restore_mode:
+            self.title(f"Restaurar Aluno - {restore_data.get('Nome', '')}")
         else:
             self.title("Adicionar Novo Aluno")
 
@@ -2077,18 +2187,25 @@ class AddStudentToplevel(ctk.CTkToplevel):
         button_frame.grid_columnconfigure((0, 1), weight=1)
         
         # --- Botão Cancelar ---
-        cancel_text = "Limpar" if not self.is_edit_mode else "Cancelar"
-        cancel_command = self._clear_personal_info_fields if not self.is_edit_mode else self._on_close
+        cancel_text = "Limpar" if not (self.is_edit_mode or self.is_restore_mode) else "Cancelar"
+        cancel_command = self._clear_personal_info_fields if not (self.is_edit_mode or self.is_restore_mode) else self._on_close
         cancel_button = ctk.CTkButton(button_frame, text=cancel_text, command=cancel_command,
                                       fg_color="transparent", border_width=1,
                                       height=40)
         cancel_button.grid(row=0, column=0, padx=(0, 5), sticky="ew")
         # --- Botão Adicionar/Salvar ---
-        add_text = "Adicionar Aluno" if not self.is_edit_mode else "Salvar Alterações"
+        if self.is_restore_mode:
+            add_text = "Restaurar Aluno"
+        else:
+            add_text = "Adicionar Aluno" if not self.is_edit_mode else "Salvar Alterações"
+            
         add_button = ctk.CTkButton(button_frame, text=add_text, command=self._submit, height=40)
         add_button.grid(row=0, column=1, padx=(5, 0), sticky="ew")
 
-        if self.is_edit_mode:
+        if self.is_edit_mode or self.is_restore_mode:
+            # Se for restauração, usamos os dados de restore para preencher
+            if self.is_restore_mode:
+                self.edit_data = self.restore_data 
             self._populate_form_for_edit()
 
         # Navegação com Enter
@@ -2177,6 +2294,11 @@ class AddStudentToplevel(ctk.CTkToplevel):
                 encoded_name = quote(original_name)
                 response = requests.put(f"{API_BASE_URL}/api/aluno/{encoded_name}", json=data)
                 success_message = f"Dados de '{data['Nome']}' salvos com sucesso!"
+            elif self.is_restore_mode:
+                # Endpoint para RESTAURAR um aluno (move de exclusões para alunos)
+                # Assume-se que o backend implementa esta lógica
+                response = requests.post(f"{API_BASE_URL}/api/restaurar", json=data)
+                success_message = f"Aluno '{data['Nome']}' restaurado com sucesso!"
             else:
                 # Endpoint para CRIAR um novo aluno
                 response = requests.post(f"{API_BASE_URL}/api/aluno", json=data)
@@ -2190,7 +2312,7 @@ class AddStudentToplevel(ctk.CTkToplevel):
             if self.on_success:
                 self.on_success(data)
             
-            if self.is_edit_mode:
+            if self.is_edit_mode or self.is_restore_mode:
                 self._on_close() # Fecha a janela após salvar
             else:
                 # Limpa os campos pessoais para a próxima adição, mantendo os da turma
@@ -2198,6 +2320,12 @@ class AddStudentToplevel(ctk.CTkToplevel):
             
         except requests.exceptions.RequestException as e:
             action = "salvar as alterações" if self.is_edit_mode else "adicionar o aluno"
+            if self.is_restore_mode:
+                action = "restaurar o aluno"
+            elif self.is_edit_mode:
+                action = "salvar as alterações"
+            else:
+                action = "adicionar o aluno"
             error_msg = f"Não foi possível {action}."
 
             if e.response is not None:

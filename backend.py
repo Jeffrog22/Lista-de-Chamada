@@ -53,7 +53,7 @@ def definir_categoria_por_idade(idade, df_categorias):
             
     return "Não definida"
 
-def get_dados_cached() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def get_dados_cached() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Carrega os dados da planilha Excel, usando um cache em memória para evitar
     leituras repetidas do arquivo a cada requisição.
@@ -92,7 +92,13 @@ def get_dados_cached() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.Dat
             else:
                 df_justificativas = pd.DataFrame(columns=['Nome', 'Data', 'Motivo'])
 
-            _cache["data"] = (df_alunos, df_turmas, df_registros, df_categorias, df_justificativas)
+            # Carrega exclusões ou cria um DF vazio se a aba não existir
+            if 'Exclusões' in xls.sheet_names:
+                df_exclusoes = pd.read_excel(xls, sheet_name='Exclusões').fillna("")
+            else:
+                df_exclusoes = pd.DataFrame(columns=['Nome', 'Turma', 'Horário', 'Professor', 'Data Exclusão'])
+
+            _cache["data"] = (df_alunos, df_turmas, df_registros, df_categorias, df_justificativas, df_exclusoes)
             _cache["timestamp"] = now # Usa 'now' para o timestamp do cache
         except FileNotFoundError:
             raise HTTPException(status_code=500, detail=f"Arquivo '{NOME_ARQUIVO}' não encontrado no servidor.")
@@ -171,7 +177,7 @@ def root():
 @app.get("/api/filtros")
 def obter_opcoes_de_filtro():
     """Retorna listas de opções únicas para os filtros do frontend."""
-    df_alunos, df_turmas, _, df_categorias, _ = get_dados_cached()
+    df_alunos, df_turmas, _, df_categorias, _, _ = get_dados_cached()
     
     turmas = df_turmas['Turma'].unique().tolist()
     
@@ -194,7 +200,7 @@ def obter_opcoes_de_filtro():
 @app.get("/api/all-alunos")
 def get_all_alunos():
     """Retorna a lista completa de alunos."""
-    df_alunos, _, _, _, _ = get_dados_cached()
+    df_alunos, _, _, _, _, _ = get_dados_cached()
     # Formata o horário para exibição consistente
     df_alunos['Horário'] = df_alunos['Horário'].apply(formatar_horario)
     return df_alunos.to_dict(orient='records')
@@ -202,7 +208,7 @@ def get_all_alunos():
 @app.get("/api/all-turmas")
 def get_all_turmas():
     """Retorna a lista completa de turmas."""
-    df_alunos, df_turmas, _, _, _ = get_dados_cached()
+    df_alunos, df_turmas, _, _, _, _ = get_dados_cached()
 
     # Formata os horários em ambos os dataframes para garantir a correspondência
     df_alunos['Horario_Formatado'] = df_alunos['Horário'].apply(formatar_horario)
@@ -238,7 +244,7 @@ def get_all_turmas():
 @app.get("/api/categorias")
 def get_all_categorias():
     """Retorna a lista completa de categorias com suas regras de idade."""
-    _, _, _, df_categorias, _ = get_dados_cached()
+    _, _, _, df_categorias, _, _ = get_dados_cached()
     return df_categorias.to_dict(orient='records')
 
 
@@ -252,7 +258,7 @@ def obter_alunos_filtrados(
     """
     Retorna a lista de alunos e os registros de presença para um determinado mês.
     """
-    df_alunos, _, df_registros, _, df_justificativas = get_dados_cached()
+    df_alunos, _, df_registros, _, df_justificativas, _ = get_dados_cached()
     ano_vigente = datetime.now().year
 
     # --- Lógica para gerar as datas de aula (adaptada do Streamlit) ---
@@ -342,7 +348,7 @@ def obter_alunos_filtrados(
 def obter_relatorio_frequencia(dias: int = 30):
     """Calcula e retorna as métricas de frequência para um período em dias."""
     try:
-        _, _, df_registros, _, _ = get_dados_cached()
+        _, _, df_registros, _, _, _ = get_dados_cached()
     except Exception:
         return {"error": "Nenhum registro encontrado."}
 
@@ -393,7 +399,7 @@ def salvar_chamada(payload: dict):
     """
     try:
         # Carrega todos os dados do cache para uma reescrita segura
-        df_alunos, df_turmas, df_registros_orig, df_categorias, df_justificativas = get_dados_cached()
+        df_alunos, df_turmas, df_registros_orig, df_categorias, df_justificativas, df_exclusoes = get_dados_cached()
         df_registros = df_registros_orig.copy()
 
         registros = payload.get("registros")
@@ -436,6 +442,7 @@ def salvar_chamada(payload: dict):
                 df_categorias.to_excel(writer, sheet_name='Categorias', index=False)
                 df_registros.to_excel(writer, sheet_name='Registros', index=False)
                 df_justificativas.to_excel(writer, sheet_name='Justificativas', index=False)
+                df_exclusoes.to_excel(writer, sheet_name='Exclusões', index=False)
         except PermissionError:
             raise HTTPException(status_code=500, detail=f"Erro de permissão. O arquivo '{NOME_ARQUIVO}' pode estar aberto em outro programa.")
 
@@ -452,7 +459,7 @@ def salvar_chamada(payload: dict):
 def salvar_justificativa(payload: JustificativaPayload):
     """Salva uma nova justificativa na aba 'Justificativas'."""
     try:
-        df_alunos, df_turmas, df_registros, df_categorias, df_justificativas = get_dados_cached()
+        df_alunos, df_turmas, df_registros, df_categorias, df_justificativas, df_exclusoes = get_dados_cached()
         
         # Adiciona a nova justificativa
         nova_linha = pd.DataFrame([payload.dict()])
@@ -464,6 +471,7 @@ def salvar_justificativa(payload: JustificativaPayload):
             df_categorias.to_excel(writer, sheet_name='Categorias', index=False)
             df_registros.to_excel(writer, sheet_name='Registros', index=False)
             df_justificativas.to_excel(writer, sheet_name='Justificativas', index=False)
+            df_exclusoes.to_excel(writer, sheet_name='Exclusões', index=False)
             
         _cache["timestamp"] = 0
         return {"status": "Justificativa salva com sucesso"}
@@ -478,7 +486,7 @@ def adicionar_aluno(aluno_data: AlunoPayload):
     """Adiciona um novo aluno à planilha 'Alunos'."""
     try:
         # Carrega os dados atuais para garantir que não estamos sobrescrevendo nada
-        df_alunos, df_turmas, df_registros, df_categorias, df_justificativas = get_dados_cached()
+        df_alunos, df_turmas, df_registros, df_categorias, df_justificativas, df_exclusoes = get_dados_cached()
 
         # Verifica se o aluno já existe (pelo nome)
         if aluno_data.Nome in df_alunos['Nome'].values:
@@ -508,6 +516,7 @@ def adicionar_aluno(aluno_data: AlunoPayload):
             df_categorias.to_excel(writer, sheet_name='Categorias', index=False)
             df_registros.to_excel(writer, sheet_name='Registros', index=False)
             df_justificativas.to_excel(writer, sheet_name='Justificativas', index=False)
+            df_exclusoes.to_excel(writer, sheet_name='Exclusões', index=False)
 
         # Força a limpeza do cache para que a próxima leitura inclua o novo aluno
         _cache["timestamp"] = 0
@@ -528,7 +537,7 @@ def atualizar_aluno(nome_original: str, aluno_data: AlunoPayload):
         nome_real = unquote(nome_original)
 
         # Obtém dados do cache
-        df_alunos_cache, df_turmas, df_registros_cache, df_categorias, df_justificativas = get_dados_cached()
+        df_alunos_cache, df_turmas, df_registros_cache, df_categorias, df_justificativas, df_exclusoes = get_dados_cached()
         
         # Trabalha com cópias para não afetar o cache antes de salvar com sucesso
         df_alunos = df_alunos_cache.copy()
@@ -565,6 +574,7 @@ def atualizar_aluno(nome_original: str, aluno_data: AlunoPayload):
             df_categorias.to_excel(writer, sheet_name='Categorias', index=False)
             df_registros.to_excel(writer, sheet_name='Registros', index=False)
             df_justificativas.to_excel(writer, sheet_name='Justificativas', index=False)
+            df_exclusoes.to_excel(writer, sheet_name='Exclusões', index=False)
 
         # Invalida o cache para forçar recarregamento
         _cache["timestamp"] = 0
@@ -576,6 +586,97 @@ def atualizar_aluno(nome_original: str, aluno_data: AlunoPayload):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro interno ao atualizar aluno: {e}")
 
+# --- NOVO ENDPOINT PARA EXCLUIR ALUNO (MOVER PARA EXCLUSÕES) ---
+@app.delete("/api/aluno/{nome_original}")
+def excluir_aluno(nome_original: str):
+    """Remove o aluno da lista ativa e o move para a aba 'Exclusões'."""
+    try:
+        nome_real = unquote(nome_original)
+        df_alunos, df_turmas, df_registros, df_categorias, df_justificativas, df_exclusoes = get_dados_cached()
+
+        if nome_real not in df_alunos['Nome'].values:
+            raise HTTPException(status_code=404, detail=f"Aluno '{nome_real}' não encontrado.")
+
+        # Extrai a linha do aluno
+        aluno_row = df_alunos[df_alunos['Nome'] == nome_real].iloc[0].to_dict()
+        
+        # Adiciona a data de exclusão
+        aluno_row['Data Exclusão'] = datetime.now()
+        
+        # Adiciona à tabela de exclusões
+        df_exclusoes = pd.concat([df_exclusoes, pd.DataFrame([aluno_row])], ignore_index=True)
+        
+        # Remove da tabela de alunos
+        df_alunos = df_alunos[df_alunos['Nome'] != nome_real]
+
+        # Salva tudo
+        with pd.ExcelWriter(NOME_ARQUIVO, engine='openpyxl') as writer:
+            df_alunos.to_excel(writer, sheet_name='Alunos', index=False)
+            df_turmas.to_excel(writer, sheet_name='Turmas', index=False)
+            df_categorias.to_excel(writer, sheet_name='Categorias', index=False)
+            df_registros.to_excel(writer, sheet_name='Registros', index=False)
+            df_justificativas.to_excel(writer, sheet_name='Justificativas', index=False)
+            df_exclusoes.to_excel(writer, sheet_name='Exclusões', index=False)
+
+        _cache["timestamp"] = 0
+        return {"status": f"Aluno '{nome_real}' movido para Exclusões."}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao excluir aluno: {e}")
+
+# --- NOVO ENDPOINT PARA LISTAR EXCLUSÕES ---
+@app.get("/api/exclusoes")
+def get_exclusoes():
+    """Retorna a lista de alunos excluídos."""
+    _, _, _, _, _, df_exclusoes = get_dados_cached()
+    # Formata datas se necessário, ou retorna como está
+    return df_exclusoes.to_dict(orient='records')
+
+# --- NOVO ENDPOINT PARA RESTAURAR ALUNO ---
+@app.post("/api/restaurar")
+def restaurar_aluno(aluno_data: AlunoPayload):
+    """Restaura um aluno da lista de exclusões para a lista ativa."""
+    try:
+        df_alunos, df_turmas, df_registros, df_categorias, df_justificativas, df_exclusoes = get_dados_cached()
+        
+        nome_aluno = aluno_data.Nome
+        
+        # Verifica se já existe na lista ativa (evitar duplicatas)
+        if nome_aluno in df_alunos['Nome'].values:
+             # Se já existe, apenas removemos da exclusão (assumindo que foi recriado manualmente ou restaurado antes)
+             pass
+        else:
+            # Prepara dados para reinserção
+            novo_aluno_dict = aluno_data.dict()
+            novo_aluno_dict['Data de Nascimento'] = novo_aluno_dict.pop('Aniversario')
+            if 'Telefone' in novo_aluno_dict:
+                novo_aluno_dict['Whatsapp'] = novo_aluno_dict.pop('Telefone')
+            
+            # Adiciona de volta aos alunos
+            df_alunos = pd.concat([df_alunos, pd.DataFrame([novo_aluno_dict])], ignore_index=True)
+
+        # Remove da lista de exclusões (remove todas as ocorrências desse nome)
+        if 'Nome' in df_exclusoes.columns:
+            df_exclusoes = df_exclusoes[df_exclusoes['Nome'] != nome_aluno]
+
+        # Salva tudo
+        with pd.ExcelWriter(NOME_ARQUIVO, engine='openpyxl') as writer:
+            df_alunos.to_excel(writer, sheet_name='Alunos', index=False)
+            df_turmas.to_excel(writer, sheet_name='Turmas', index=False)
+            df_categorias.to_excel(writer, sheet_name='Categorias', index=False)
+            df_registros.to_excel(writer, sheet_name='Registros', index=False)
+            df_justificativas.to_excel(writer, sheet_name='Justificativas', index=False)
+            df_exclusoes.to_excel(writer, sheet_name='Exclusões', index=False)
+
+        _cache["timestamp"] = 0
+        return {"status": f"Aluno '{nome_aluno}' restaurado com sucesso."}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao restaurar aluno: {e}")
+
+
 # --- NOVO ENDPOINT PARA EXCLUIR TURMA ---
 @app.delete("/api/turma")
 def excluir_turma(
@@ -585,7 +686,7 @@ def excluir_turma(
 ):
     """Exclui uma turma da planilha 'Turmas'."""
     try:
-        df_alunos, df_turmas, df_registros, df_categorias, df_justificativas = get_dados_cached()
+        df_alunos, df_turmas, df_registros, df_categorias, df_justificativas, df_exclusoes = get_dados_cached()
         
         # Cria uma cópia para manipulação e formata o horário para localizar a linha correta
         df_turmas_temp = df_turmas.copy()
@@ -612,6 +713,7 @@ def excluir_turma(
             df_categorias.to_excel(writer, sheet_name='Categorias', index=False)
             df_registros.to_excel(writer, sheet_name='Registros', index=False)
             df_justificativas.to_excel(writer, sheet_name='Justificativas', index=False)
+            df_exclusoes.to_excel(writer, sheet_name='Exclusões', index=False)
             
         # Invalida o cache
         _cache["timestamp"] = 0
@@ -630,7 +732,7 @@ def excluir_turma(
 def atualizar_nivel_turma(payload: TurmaNivelPayload):
     """Atualiza o nível de uma turma existente."""
     try:
-        df_alunos, df_turmas, df_registros, df_categorias, df_justificativas = get_dados_cached()
+        df_alunos, df_turmas, df_registros, df_categorias, df_justificativas, df_exclusoes = get_dados_cached()
         
         # Cria cópia para manipulação segura e busca
         df_turmas_temp = df_turmas.copy()
@@ -658,6 +760,7 @@ def atualizar_nivel_turma(payload: TurmaNivelPayload):
             df_categorias.to_excel(writer, sheet_name='Categorias', index=False)
             df_registros.to_excel(writer, sheet_name='Registros', index=False)
             df_justificativas.to_excel(writer, sheet_name='Justificativas', index=False)
+            df_exclusoes.to_excel(writer, sheet_name='Exclusões', index=False)
             
         _cache["timestamp"] = 0 # Invalida cache
         return {"status": "Nível atualizado com sucesso"}
@@ -671,7 +774,7 @@ def atualizar_nivel_turma(payload: TurmaNivelPayload):
 def adicionar_turma(turma_data: TurmaPayload):
     """Adiciona uma nova turma à planilha 'Turmas'."""
     try:
-        df_alunos, df_turmas, df_registros, df_categorias, df_justificativas = get_dados_cached()
+        df_alunos, df_turmas, df_registros, df_categorias, df_justificativas, df_exclusoes = get_dados_cached()
 
         # Verifica duplicidade
         df_check = df_turmas.copy()
@@ -702,6 +805,7 @@ def adicionar_turma(turma_data: TurmaPayload):
             df_categorias.to_excel(writer, sheet_name='Categorias', index=False)
             df_registros.to_excel(writer, sheet_name='Registros', index=False)
             df_justificativas.to_excel(writer, sheet_name='Justificativas', index=False)
+            df_exclusoes.to_excel(writer, sheet_name='Exclusões', index=False)
 
         _cache["timestamp"] = 0
         return {"status": "Turma adicionada com sucesso!"}
@@ -714,7 +818,7 @@ def adicionar_turma(turma_data: TurmaPayload):
 def editar_turma(payload: TurmaEditPayload):
     """Edita uma turma existente."""
     try:
-        df_alunos, df_turmas_cache, df_registros, df_categorias, df_justificativas = get_dados_cached()
+        df_alunos, df_turmas_cache, df_registros, df_categorias, df_justificativas, df_exclusoes = get_dados_cached()
         df_turmas = df_turmas_cache.copy()
         
         df_turmas_temp = df_turmas.copy()
@@ -744,6 +848,7 @@ def editar_turma(payload: TurmaEditPayload):
             df_categorias.to_excel(writer, sheet_name='Categorias', index=False)
             df_registros.to_excel(writer, sheet_name='Registros', index=False)
             df_justificativas.to_excel(writer, sheet_name='Justificativas', index=False)
+            df_exclusoes.to_excel(writer, sheet_name='Exclusões', index=False)
             
         _cache["timestamp"] = 0
         return {"status": "Turma atualizada com sucesso!"}
