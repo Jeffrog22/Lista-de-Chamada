@@ -2,7 +2,7 @@ import customtkinter as ctk
 import tkinter as tk
 from tkinter import messagebox
 import json
-from tkinter import font as tkfont
+from tkinter import font as tkfont, filedialog
 import requests
 import threading
 from datetime import datetime
@@ -381,6 +381,10 @@ class App(ctk.CTk):
         self.window_geometries = {} # Cache para geometria das janelas (Toplevels)
         self.chamada_undo_stack = [] # Pilha para desfazer ações na chamada
         self.relatorios_selection_vars = {} # Armazena as variáveis dos checkboxes de relatório
+        self.anos_opcoes = [] # Cache de anos disponíveis (do backend)
+        self.meses_opcoes = [] # Cache de meses disponíveis (do backend)
+        self.relatorios_filter_state = {} # Estado dos filtros da aba Relatórios
+        self.relatorios_sort_state = [] # Estado da ordenação da aba Relatórios
         
         # Mapeamento de views para seus frames de controle
         self.control_frames = {
@@ -541,6 +545,24 @@ class App(ctk.CTk):
                     self.chamada_horario_combo.set(horarios_ordenados[0] if horarios_ordenados else "")
                     professores = data.get('professores', [])
                     self._criar_radio_professores(professores)
+
+                    # --- Atualiza opções de Ano e Mês (Relatórios) com dados do backend ---
+                    self.anos_opcoes = data.get('anos', [])
+                    self.meses_opcoes = data.get('meses', [])
+
+                    if self.anos_opcoes:
+                        self.relatorios_ano_combo.configure(values=[str(a) for a in self.anos_opcoes])
+                        # Tenta selecionar o ano atual, senão o mais recente
+                        ano_atual = datetime.now().year
+                        if ano_atual in self.anos_opcoes:
+                            self.relatorios_ano_combo.set(str(ano_atual))
+                        else:
+                            self.relatorios_ano_combo.set(str(self.anos_opcoes[0]))
+                    
+                    if self.meses_opcoes:
+                        nomes_meses = [m['nome'] for m in self.meses_opcoes]
+                        self.relatorios_mes_combo.configure(values=nomes_meses)
+                        # O mês atual será ajustado em carregar_interface_relatorios ou mantido o padrão
                 self.after(0, _update_ui) # Agenda a atualização da UI
 
             except requests.exceptions.RequestException as e:
@@ -2068,11 +2090,15 @@ class App(ctk.CTk):
         """Prepara a interface de relatórios, carregando datas e turmas."""
         # Define valores padrão para Ano e Mês se ainda não definidos
         hoje = datetime.now()
-        meses_pt = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Junho',
-                    7: 'Julho', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
         
-        self.relatorios_ano_combo.set(str(hoje.year))
-        self.relatorios_mes_combo.set(meses_pt.get(hoje.month))
+        # Se já temos opções carregadas do backend, garantimos a seleção correta
+        if self.anos_opcoes and hoje.year in self.anos_opcoes:
+            self.relatorios_ano_combo.set(str(hoje.year))
+        
+        if self.meses_opcoes:
+            nome_mes_atual = next((m['nome'] for m in self.meses_opcoes if m['valor'] == hoje.month), "")
+            if nome_mes_atual:
+                self.relatorios_mes_combo.set(nome_mes_atual)
 
         # Carrega as turmas no grid
         self.construir_grid_relatorios()
@@ -2083,7 +2109,34 @@ class App(ctk.CTk):
             widget.destroy()
         
         self.relatorios_selection_vars = {}
-        turmas = self.turmas_data or []
+        turmas = list(self.turmas_data) if self.turmas_data else []
+
+        # --- Filtragem (Lógica Vice-Versa) ---
+        if self.relatorios_filter_state:
+            for key, selected_values in self.relatorios_filter_state.items():
+                if not selected_values: continue
+                turmas = [t for t in turmas if str(t.get(key, '')) in selected_values]
+
+        # --- Ordenação ---
+        if self.relatorios_sort_state:
+            nivel_order = {
+                'Iniciação B': 0, 'Iniciação A': 1, 'Nível 1': 2, 'Nível 2': 3,
+                'Nível 3': 4, 'Nível 4': 5, 'Adulto B': 6, 'Adulto A': 7
+            }
+            
+            def get_sort_value(item, sort_key):
+                val = item.get(sort_key, '')
+                if val is None: val = ''
+                if sort_key == 'Nível':
+                    return nivel_order.get(val, 99)
+                if sort_key == 'Horário':
+                    return val.split('-')[0]
+                return str(val).lower()
+
+            for sort_instruction in self.relatorios_sort_state:
+                key = sort_instruction['key']
+                reverse = sort_instruction['reverse']
+                turmas.sort(key=lambda t, k=key: get_sort_value(t, k), reverse=reverse)
 
         if not turmas:
             ctk.CTkLabel(self.relatorios_scroll_frame, text="Nenhuma turma encontrada.").pack(pady=20)
@@ -2091,6 +2144,7 @@ class App(ctk.CTk):
 
         # Configuração das colunas
         headers = ["Turma", "Horário", "Nível", "Professor", "Ações"]
+        filterable_headers = ["Turma", "Horário", "Nível", "Professor"]
         
         # Pesos: Colunas de dados expandem, colunas de ação (Ver/Check) ficam fixas/pequenas
         self.relatorios_scroll_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
@@ -2098,7 +2152,35 @@ class App(ctk.CTk):
 
         # Cabeçalhos
         for i, header in enumerate(headers):
-            ctk.CTkLabel(self.relatorios_scroll_frame, text=header, font=ctk.CTkFont(weight="bold")).grid(row=0, column=i, padx=5, pady=5, sticky="ew")
+            if header in filterable_headers:
+                # Cria botão de filtro
+                display_text = header
+                sort_info = next((item for item in self.relatorios_sort_state if item['key'] == header), None)
+                is_sorted = sort_info is not None
+                is_filtered = header in self.relatorios_filter_state and self.relatorios_filter_state[header]
+
+                if is_sorted:
+                    sort_arrow = '▼' if sort_info['reverse'] else '▲'
+                    display_text = f"{header} {sort_arrow}"
+                elif is_filtered:
+                    display_text += " ▾"
+
+                fg_color = ("#e0e2e4", "#4a4d50") if (is_sorted or is_filtered) else "transparent"
+                
+                btn = ctk.CTkButton(self.relatorios_scroll_frame, text=display_text,
+                                    font=ctk.CTkFont(weight="bold"),
+                                    fg_color=fg_color,
+                                    text_color=("gray10", "gray90"),
+                                    hover_color=("#d3d5d7", "#5a5d60"),
+                                    anchor="center")
+                btn.configure(command=lambda k=header, b=btn: self._open_relatorios_filter_menu(k, b))
+                
+                if not (is_sorted or is_filtered):
+                    btn.configure(hover=False)
+                
+                btn.grid(row=0, column=i, padx=5, pady=5, sticky="ew")
+            else:
+                ctk.CTkLabel(self.relatorios_scroll_frame, text=header, font=ctk.CTkFont(weight="bold")).grid(row=0, column=i, padx=5, pady=5, sticky="ew")
 
         # Linhas
         for row_idx, turma in enumerate(turmas, start=1):
@@ -2127,6 +2209,57 @@ class App(ctk.CTk):
             chk = ctk.CTkCheckBox(actions_frame, text="", variable=var, width=20, checkbox_width=20, checkbox_height=20)
             chk.pack(side="left", padx=5)
 
+        # Adiciona botão de Gerar Excel no topo ou rodapé se houver turmas
+        if turmas:
+            btn_excel = ctk.CTkButton(self.relatorios_scroll_frame, text="📥 Gerar Excel das Turmas Selecionadas", 
+                                      fg_color="#27ae60", hover_color="#2ecc71",
+                                      command=self.gerar_relatorio_excel)
+            btn_excel.grid(row=len(turmas)+1, column=0, columnspan=5, pady=20)
+
+    def _open_relatorios_filter_menu(self, key, button_widget):
+        """Abre o menu de filtro para a aba Relatórios."""
+        if self.active_filter_menu and self.active_filter_menu.winfo_exists():
+            is_same = getattr(self.active_filter_menu, 'button_widget', None) == button_widget
+            self.active_filter_menu.destroy()
+            if is_same: return
+        self.after(10, lambda: self._create_relatorios_filter_menu_safely(key, button_widget))
+
+    def _create_relatorios_filter_menu_safely(self, key, button_widget):
+        if not self.turmas_data or self.active_filter_menu: return
+
+        # Filtra opções disponíveis baseado nos outros filtros (Lógica Vice-Versa)
+        dados_para_menu = self.turmas_data
+        for filter_key, selected_values in self.relatorios_filter_state.items():
+            if filter_key != key and selected_values:
+                dados_para_menu = [item for item in dados_para_menu if str(item.get(filter_key) or '') in selected_values]
+
+        unique_values = sorted(list(set(str(item.get(key) or '') for item in dados_para_menu)))
+
+        if not unique_values:
+             messagebox.showinfo("Filtro", f"Não há valores disponíveis para filtrar na coluna '{key}'.", parent=self)
+             return
+
+        # Define se mostra botões de ordenação conforme solicitado
+        # Turma: Apenas caixa de seleção (False)
+        # Horário, Nível, Professor: Ordenação + caixa de seleção (True)
+        show_sort = key in ["Horário", "Nível", "Professor"]
+
+        self.active_filter_menu = FilterMenu(self, key, unique_values, button_widget, self._apply_relatorios_filter_and_sort,
+                                             active_filters=self.relatorios_filter_state.get(key),
+                                             cache_key=f"Relatorios_{key}",
+                                             align="center",
+                                             show_sort_buttons=show_sort)
+
+    def _apply_relatorios_filter_and_sort(self, key, selected_values, sort_direction=None):
+        if selected_values is not None:
+            self.relatorios_filter_state[key] = selected_values
+        
+        if sort_direction is not None:
+            self.relatorios_sort_state = [s for s in self.relatorios_sort_state if s['key'] != key]
+            self.relatorios_sort_state.append({'key': key, 'reverse': sort_direction == 'desc'})
+        
+        self.construir_grid_relatorios()
+
     def abrir_visualizacao_relatorio(self, turma_info):
         """Abre um frame/janela com a visualização dos dados da chamada para a turma selecionada."""
         ano = self.relatorios_ano_combo.get()
@@ -2141,6 +2274,64 @@ class App(ctk.CTk):
         ctk.CTkLabel(top, text=f"Visualização de Chamada: {turma_info.get('Turma')}", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=20)
         ctk.CTkLabel(top, text=f"Período: {mes} de {ano}", font=ctk.CTkFont(size=14)).pack(pady=(0, 20))
         ctk.CTkLabel(top, text="(Aqui será exibida a grade de presença consolidada)", text_color="gray").pack(expand=True)
+
+    def gerar_relatorio_excel(self):
+        """Gera e baixa os relatórios Excel para as turmas selecionadas."""
+        # Identifica turmas selecionadas
+        turmas_selecionadas = []
+        for turma_id, var in self.relatorios_selection_vars.items():
+            if var.get():
+                # Recupera os dados originais da turma baseados no ID (Turma_Horário)
+                # Precisamos iterar sobre self.turmas_data para achar o objeto completo
+                parts = turma_id.split('_')
+                # Busca simples (pode falhar se houver "_" no nome da turma, ideal seria usar ID único, mas vamos tentar match)
+                # Melhor abordagem: iterar sobre self.turmas_data e reconstruir a chave para comparar
+                for t in self.turmas_data:
+                    if f"{t.get('Turma')}_{t.get('Horário')}" == turma_id:
+                        turmas_selecionadas.append(t)
+                        break
+        
+        if not turmas_selecionadas:
+            messagebox.showwarning("Aviso", "Selecione pelo menos uma turma na lista para gerar o relatório.")
+            return
+
+        ano = self.relatorios_ano_combo.get()
+        nome_mes = self.relatorios_mes_combo.get()
+        # Converte nome do mês para número
+        mes_num = next((m['valor'] for m in self.meses_opcoes if m['nome'] == nome_mes), datetime.now().month)
+
+        # Pede pasta para salvar
+        folder_selected = filedialog.askdirectory(title="Selecione a pasta para salvar os relatórios")
+        if not folder_selected:
+            return
+
+        # Prepara a lista de requisições para o backend
+        requests_payload = []
+        for turma in turmas_selecionadas:
+            requests_payload.append({
+                "turma": turma['Turma'],
+                "horario": turma['Horário'],
+                "professor": turma['Professor'],
+                "mes": mes_num,
+                "ano": int(ano)
+            })
+
+        try:
+            # Faz uma única requisição POST para gerar o arquivo consolidado
+            response = requests.post(f"{API_BASE_URL}/api/relatorio/excel_consolidado", json=requests_payload, stream=True)
+            response.raise_for_status()
+            
+            filename = f"Relatorio_Geral_{mes_num}_{ano}.xlsx"
+            filepath = f"{folder_selected}/{filename}"
+            
+            with open(filepath, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            
+            messagebox.showinfo("Sucesso", f"Relatório consolidado gerado com sucesso em:\n{filepath}")
+            
+        except Exception as e:
+            messagebox.showerror("Erro", f"Falha ao gerar relatório: {e}")
 
     # MODIFICADO: A lógica foi movida para a classe AddStudentToplevel
     def open_add_student_window(self):

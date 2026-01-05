@@ -1,11 +1,13 @@
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from datetime import datetime, timedelta
 import calendar
 from pydantic import BaseModel
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 import time, os
+import io
 from urllib.parse import unquote
 
 # --- INICIALIZAÇÃO DO APP FASTAPI ---
@@ -26,6 +28,7 @@ app.add_middleware(
 
 # --- CONSTANTES E FUNÇÕES AUXILIARES ---
 NOME_ARQUIVO = 'chamadaBelaVista.xlsx'
+TEMPLATE_RELATORIO = 'relatorioChamada.xlsx'
 CACHE_EXPIRATION_SECONDS = 60  # Recarrega os dados do Excel a cada 60 segundos
 _cache: Dict[str, any] = {"data": None, "timestamp": 0}
 
@@ -130,6 +133,13 @@ class JustificativaPayload(BaseModel):
     Nome: str
     Data: str
     Motivo: str
+    
+class RelatorioRequest(BaseModel):
+    turma: str
+    horario: str
+    professor: str
+    mes: int
+    ano: int
 
 class AlunoPayload(BaseModel):
     """Define a estrutura dos dados de um novo aluno que o frontend enviará."""
@@ -177,7 +187,7 @@ def root():
 @app.get("/api/filtros")
 def obter_opcoes_de_filtro():
     """Retorna listas de opções únicas para os filtros do frontend."""
-    df_alunos, df_turmas, _, df_categorias, _, _ = get_dados_cached()
+    df_alunos, df_turmas, df_registros, df_categorias, _, _ = get_dados_cached()
     
     turmas = df_turmas['Turma'].unique().tolist()
     
@@ -189,12 +199,40 @@ def obter_opcoes_de_filtro():
     categorias = df_alunos['Categoria'].unique().tolist() if 'Categoria' in df_alunos.columns else []
     niveis = df_alunos['Nível'].unique().tolist() if 'Nível' in df_alunos.columns else []
     
+    # Identifica os anos presentes nas colunas de data do Excel (aba Registros)
+    anos_disponiveis = {datetime.now().year}
+    for col in df_registros.columns:
+        # Verifica se a coluna tem formato de data dd/mm/yyyy
+        if isinstance(col, str) and len(col) == 10 and col[2] == '/' and col[5] == '/':
+            try:
+                ano_col = int(col.split('/')[2])
+                anos_disponiveis.add(ano_col)
+            except ValueError:
+                pass
+    
+    meses_pt = [
+        {"valor": 1, "nome": "Janeiro"},
+        {"valor": 2, "nome": "Fevereiro"},
+        {"valor": 3, "nome": "Março"},
+        {"valor": 4, "nome": "Abril"},
+        {"valor": 5, "nome": "Maio"},
+        {"valor": 6, "nome": "Junho"},
+        {"valor": 7, "nome": "Julho"},
+        {"valor": 8, "nome": "Agosto"},
+        {"valor": 9, "nome": "Setembro"},
+        {"valor": 10, "nome": "Outubro"},
+        {"valor": 11, "nome": "Novembro"},
+        {"valor": 12, "nome": "Dezembro"}
+    ]
+
     return {
         "turmas": turmas,
         "horarios": horarios,
         "professores": professores,
         "categorias": sorted([cat for cat in categorias if cat != "Não definida"]),
-        "niveis": sorted([n for n in niveis if n != ""]) if niveis is not None else []
+        "niveis": sorted([n for n in niveis if n != ""]) if niveis is not None else [],
+        "anos": sorted(list(anos_disponiveis), reverse=True),
+        "meses": meses_pt
     }
 
 @app.get("/api/all-alunos")
@@ -253,13 +291,14 @@ def obter_alunos_filtrados(
     turma: str = Query(...),
     horario: str = Query(...),
     professor: str = Query(...),
-    mes: int = Query(...)
+    mes: int = Query(...),
+    ano: Optional[int] = Query(None)
 ):
     """
-    Retorna a lista de alunos e os registros de presença para um determinado mês.
+    Retorna a lista de alunos e os registros de presença para um determinado mês e ano.
     """
     df_alunos, _, df_registros, _, df_justificativas, _ = get_dados_cached()
-    ano_vigente = datetime.now().year
+    ano_vigente = ano if ano else datetime.now().year
 
     # --- Lógica para gerar as datas de aula (adaptada do Streamlit) ---
     dias_da_semana_validos = []
@@ -299,7 +338,7 @@ def obter_alunos_filtrados(
 
     # Junta os alunos filtrados com seus registros de presença
     alunos_com_registros = pd.merge(
-        alunos_filtrados[['Turma', 'Horario_Formatado', 'Professor', 'Nível', 'Nome', 'Idade', 'Categoria']],
+        alunos_filtrados[['Turma', 'Horario_Formatado', 'Professor', 'Nível', 'Nome', 'Idade', 'Categoria', 'Whatsapp', 'ParQ', 'Data de Nascimento']],
         df_registros[['Nome'] + datas_mes_str],
         on='Nome',
         how='left'
@@ -307,6 +346,10 @@ def obter_alunos_filtrados(
 
     # Renomeia a coluna de horário para o frontend
     alunos_com_registros = alunos_com_registros.rename(columns={"Horario_Formatado": "Horário"})
+    
+    # Renomeia Data de Nascimento para Aniversario para manter consistência com o frontend/relatório
+    if 'Data de Nascimento' in alunos_com_registros.columns:
+        alunos_com_registros = alunos_com_registros.rename(columns={'Data de Nascimento': 'Aniversario'})
 
     # --- PROCESSAMENTO DE JUSTIFICATIVAS ---
     # Filtra as justificativas para o mês e ano solicitados e anexa ao aluno
@@ -388,6 +431,208 @@ def obter_relatorio_frequencia(dias: int = 30):
         'Frequência (%)': frequencia_percentual.round(2)
     })
     return df_resultado.reset_index().to_dict(orient='records')
+
+@app.get("/api/relatorio/excel")
+def gerar_relatorio_excel_endpoint(
+    turma: str = Query(...),
+    horario: str = Query(...),
+    professor: str = Query(...),
+    mes: int = Query(...),
+    ano: int = Query(...)
+):
+    """
+    Gera um arquivo Excel baseado no template 'relatorioChamada.xlsx' preenchido com os dados da turma.
+    """
+    try:
+        from openpyxl import load_workbook
+        from openpyxl.styles import Alignment
+    except ImportError:
+        raise HTTPException(status_code=500, detail="A biblioteca 'openpyxl' é necessária no backend.")
+
+    if not os.path.exists(TEMPLATE_RELATORIO):
+        raise HTTPException(status_code=404, detail=f"Template '{TEMPLATE_RELATORIO}' não encontrado no servidor.")
+
+    # 1. Obter dados
+    dados_api = obter_alunos_filtrados(turma, horario, professor, mes, ano)
+    alunos = dados_api.get('alunos', [])
+    datas_str = dados_api.get('datas', [])
+    
+    # 2. Carregar Template
+    try:
+        wb = load_workbook(TEMPLATE_RELATORIO)
+        ws = wb.active
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao ler o template: {e}")
+
+    # 3. Preencher Cabeçalho (Aba Turmas / Interface)
+    # B3: Professor, B4: Turma, B5: Horário
+    ws['B3'] = professor
+    ws['B4'] = turma
+    ws['B5'] = horario
+    
+    # E5: Mês selecionado (Ex: 10/2025)
+    ws['E5'] = f"{mes:02d}/{ano}"
+
+    # E6: Datas do mês (Cabeçalho das colunas de presença)
+    # Começa na coluna 5 (E)
+    col_inicio_datas = 5
+    for i, data in enumerate(datas_str):
+        # data vem como "dd/mm/yyyy", pegamos apenas o dia "dd" ou a data curta
+        dia = data.split('/')[0]
+        cell = ws.cell(row=6, column=col_inicio_datas + i)
+        cell.value = dia
+        cell.alignment = Alignment(horizontal='center')
+
+    # 4. Preencher Linhas de Alunos (A partir da linha 7)
+    linha_inicial = 7
+    for idx, aluno in enumerate(alunos):
+        linha_atual = linha_inicial + idx
+        
+        # A7: Nome
+        ws.cell(row=linha_atual, column=1, value=aluno.get('Nome', ''))
+        
+        # B7: Whatsapp
+        ws.cell(row=linha_atual, column=2, value=aluno.get('Whatsapp', ''))
+        
+        # C7: ParQ
+        ws.cell(row=linha_atual, column=3, value=aluno.get('ParQ', ''))
+        
+        # D7: Aniversário (Formatado)
+        aniversario = aluno.get('Aniversario', '')
+        if aniversario and isinstance(aniversario, str) and 'T' in aniversario:
+             aniversario = aniversario.split('T')[0] # Limpa formato ISO se houver
+        ws.cell(row=linha_atual, column=4, value=aniversario)
+
+        # E7 em diante: Registros de Presença
+        for i, data in enumerate(datas_str):
+            status = aluno.get(data, "")
+            # Mapeia códigos para visualização se necessário, ou mantém c/f/j
+            ws.cell(row=linha_atual, column=col_inicio_datas + i, value=status).alignment = Alignment(horizontal='center')
+
+        # M7: Nível (Coluna 13)
+        ws.cell(row=linha_atual, column=13, value=aluno.get('Nível', ''))
+
+    # 5. Salvar em memória e retornar stream
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    filename = f"Relatorio_{turma}_{mes}_{ano}.xlsx".replace(" ", "_").replace("/", "-")
+    
+    return StreamingResponse(
+        output, 
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+@app.post("/api/relatorio/excel_consolidado")
+def gerar_relatorio_excel_consolidado(requests_list: List[RelatorioRequest]):
+    """
+    Gera um único arquivo Excel com múltiplas abas (uma para cada turma solicitada),
+    baseado no template 'relatorioChamada.xlsx'.
+    """
+    try:
+        from openpyxl import load_workbook
+        from openpyxl.styles import Alignment
+    except ImportError:
+        raise HTTPException(status_code=500, detail="A biblioteca 'openpyxl' é necessária no backend.")
+
+    if not os.path.exists(TEMPLATE_RELATORIO):
+        raise HTTPException(status_code=404, detail=f"Template '{TEMPLATE_RELATORIO}' não encontrado no servidor.")
+
+    # 1. Carregar Template
+    try:
+        wb = load_workbook(TEMPLATE_RELATORIO)
+        template_sheet = wb.active
+        template_sheet.title = "Template"
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao ler o template: {e}")
+
+    # 2. Processar cada solicitação
+    for req in requests_list:
+        # Obter dados
+        dados_api = obter_alunos_filtrados(req.turma, req.horario, req.professor, req.mes, req.ano)
+        alunos = dados_api.get('alunos', [])
+        datas_str = dados_api.get('datas', [])
+
+        # Criar nova aba copiando o template
+        # Limpa caracteres inválidos para nome de aba Excel
+        safe_turma = "".join([c for c in req.turma if c.isalnum() or c in (' ', '-', '_')])[:20]
+        safe_horario = req.horario.replace(':', 'h')
+        sheet_title = f"{safe_turma} {safe_horario}"[:30]
+        
+        # Se a aba já existir, adiciona sufixo para evitar erro
+        count = 1
+        original_title = sheet_title
+        while sheet_title in wb.sheetnames:
+            sheet_title = f"{original_title}_{count}"
+            count += 1
+        
+        ws = wb.copy_worksheet(template_sheet)
+        ws.title = sheet_title
+
+        # Preencher Cabeçalho
+        ws['B3'] = req.professor
+        ws['B4'] = req.turma
+        ws['B5'] = req.horario
+        ws['E5'] = f"{req.mes:02d}/{req.ano}"
+
+        # Preencher Datas (Cabeçalho das colunas de presença)
+        col_inicio_datas = 5 # Coluna E
+        for i, data in enumerate(datas_str):
+            dia = data.split('/')[0]
+            cell = ws.cell(row=6, column=col_inicio_datas + i)
+            cell.value = dia
+            cell.alignment = Alignment(horizontal='center')
+
+        # Definir posição da coluna Nível (Dinâmica: logo após a última data)
+        col_nivel = col_inicio_datas + len(datas_str)
+        ws.cell(row=6, column=col_nivel, value="Nível").alignment = Alignment(horizontal='center', vertical='center')
+
+        # Preencher Linhas de Alunos
+        linha_inicial = 7
+        for idx, aluno in enumerate(alunos):
+            linha_atual = linha_inicial + idx
+            
+            ws.cell(row=linha_atual, column=1, value=aluno.get('Nome', ''))
+            ws.cell(row=linha_atual, column=2, value=aluno.get('Whatsapp', ''))
+            ws.cell(row=linha_atual, column=3, value=aluno.get('ParQ', ''))
+            
+            # Formata Aniversário
+            aniversario = aluno.get('Aniversario', '')
+            if aniversario and isinstance(aniversario, str):
+                 aniversario = aniversario.split('T')[0].split(' ')[0]
+                 try:
+                     dt_aniv = datetime.strptime(aniversario, '%Y-%m-%d')
+                     aniversario = dt_aniv.strftime('%d/%m/%Y')
+                 except:
+                     pass
+            ws.cell(row=linha_atual, column=4, value=aniversario)
+
+            # Registros de Presença
+            for i, data in enumerate(datas_str):
+                status = aluno.get(data, "")
+                ws.cell(row=linha_atual, column=col_inicio_datas + i, value=status).alignment = Alignment(horizontal='center')
+
+            # Nível na coluna dinâmica
+            ws.cell(row=linha_atual, column=col_nivel, value=aluno.get('Nível', ''))
+
+    # 3. Remover a aba de template original antes de salvar
+    if "Template" in wb.sheetnames:
+        wb.remove(wb["Template"])
+
+    # 4. Salvar em memória e retornar stream
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    filename = f"Relatorio_Consolidado_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+    
+    return StreamingResponse(
+        output, 
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
 
 @app.post("/api/chamada")
 def salvar_chamada(payload: dict):
