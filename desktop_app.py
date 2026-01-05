@@ -2262,18 +2262,107 @@ class App(ctk.CTk):
 
     def abrir_visualizacao_relatorio(self, turma_info):
         """Abre um frame/janela com a visualização dos dados da chamada para a turma selecionada."""
-        ano = self.relatorios_ano_combo.get()
-        mes = self.relatorios_mes_combo.get()
+        ano_str = self.relatorios_ano_combo.get()
+        mes_nome = self.relatorios_mes_combo.get()
+        
+        # Converte mês nome para número
+        mes_num = next((m['valor'] for m in self.meses_opcoes if m['nome'] == mes_nome), datetime.now().month)
+        try:
+            ano_num = int(ano_str)
+        except ValueError:
+            ano_num = datetime.now().year
         
         top = ctk.CTkToplevel(self)
-        top.title(f"Relatório - {turma_info.get('Turma')} ({mes}/{ano})")
-        top.geometry("600x400")
+        top.title(f"Relatório - {turma_info.get('Turma')} ({mes_nome}/{ano_str})")
+        top.geometry("1000x600")
         top.transient(self)
         self.after(10, lambda: self._center_toplevel(top))
 
-        ctk.CTkLabel(top, text=f"Visualização de Chamada: {turma_info.get('Turma')}", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=20)
-        ctk.CTkLabel(top, text=f"Período: {mes} de {ano}", font=ctk.CTkFont(size=14)).pack(pady=(0, 20))
-        ctk.CTkLabel(top, text="(Aqui será exibida a grade de presença consolidada)", text_color="gray").pack(expand=True)
+        # --- Cabeçalho ---
+        header_frame = ctk.CTkFrame(top, fg_color="transparent")
+        header_frame.pack(pady=10, padx=20, fill="x")
+        
+        ctk.CTkLabel(header_frame, text=f"Turma: {turma_info.get('Turma')}", font=ctk.CTkFont(size=18, weight="bold")).pack(anchor="w")
+        info_text = f"Horário: {turma_info.get('Horário')}  |  Professor: {turma_info.get('Professor')}  |  Nível: {turma_info.get('Nível', '-')}"
+        ctk.CTkLabel(header_frame, text=info_text, font=ctk.CTkFont(size=12)).pack(anchor="w")
+        ctk.CTkLabel(header_frame, text=f"Período: {mes_nome} de {ano_str}", font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w", pady=(5,0))
+
+        # --- Grid de Presença ---
+        scroll_frame = ctk.CTkScrollableFrame(top, label_text="Grade de Presença Consolidada")
+        scroll_frame.pack(expand=True, fill="both", padx=20, pady=(0, 20))
+
+        loading_label = ctk.CTkLabel(scroll_frame, text="Carregando dados...")
+        loading_label.pack(pady=20)
+
+        def _fetch_and_render():
+            try:
+                params = {
+                    "turma": turma_info.get('Turma'),
+                    "horario": turma_info.get('Horário'),
+                    "professor": turma_info.get('Professor'),
+                    "mes": mes_num,
+                    "ano": ano_num
+                }
+                response = requests.get(f"{API_BASE_URL}/api/alunos", params=params)
+                response.raise_for_status()
+                data = response.json()
+                
+                self.after(0, lambda: _render_grid(data))
+            except Exception as e:
+                self.after(0, lambda: _show_error(str(e)))
+
+        def _show_error(msg):
+            for w in scroll_frame.winfo_children(): w.destroy()
+            ctk.CTkLabel(scroll_frame, text=f"Erro ao carregar dados: {msg}", text_color="red").pack(pady=20)
+
+        def _render_grid(data):
+            for w in scroll_frame.winfo_children(): w.destroy()
+            
+            alunos = data.get('alunos', [])
+            datas = data.get('datas', [])
+            
+            if not alunos:
+                ctk.CTkLabel(scroll_frame, text="Nenhum aluno encontrado para esta turma neste período.").pack(pady=20)
+                return
+
+            # --- Cabeçalhos ---
+            ctk.CTkLabel(scroll_frame, text="Nome", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, padx=5, pady=5, sticky="w")
+            
+            for i, data_str in enumerate(datas):
+                dia = data_str.split('/')[0]
+                ctk.CTkLabel(scroll_frame, text=dia, font=ctk.CTkFont(weight="bold"), width=30).grid(row=0, column=i+1, padx=1, pady=5)
+
+            # --- Linhas de Alunos ---
+            for row_idx, aluno in enumerate(alunos, start=1):
+                # Nome
+                ctk.CTkLabel(scroll_frame, text=aluno.get('Nome', ''), anchor="w").grid(row=row_idx, column=0, padx=5, pady=2, sticky="ew")
+                
+                # Status por dia
+                for col_idx, data_str in enumerate(datas, start=1):
+                    status_code = aluno.get(data_str, "")
+                    
+                    # Encontra configuração visual no STATUS_MAP
+                    estilo = None
+                    for v in STATUS_MAP.values():
+                        if v["code"] == status_code:
+                            estilo = v
+                            break
+                    
+                    if estilo and status_code:
+                        # Usa Label com cor de fundo para simular o botão da chamada
+                        lbl = ctk.CTkLabel(scroll_frame, 
+                                           text=estilo["text"],
+                                           fg_color=estilo["fg_color"],
+                                           text_color="white",
+                                           width=30, height=25,
+                                           corner_radius=6,
+                                           font=ctk.CTkFont(weight="bold"))
+                        lbl.grid(row=row_idx, column=col_idx, padx=1, pady=2)
+                    else:
+                        # Célula vazia ou sem registro
+                        ctk.CTkLabel(scroll_frame, text="·", width=30, text_color="gray").grid(row=row_idx, column=col_idx, padx=1, pady=2)
+
+        self.run_in_thread(_fetch_and_render)
 
     def gerar_relatorio_excel(self):
         """Gera e baixa os relatórios Excel para as turmas selecionadas."""

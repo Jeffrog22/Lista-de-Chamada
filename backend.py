@@ -301,14 +301,23 @@ def obter_alunos_filtrados(
     ano_vigente = ano if ano else datetime.now().year
 
     # --- Lógica para gerar as datas de aula (adaptada do Streamlit) ---
-    dias_da_semana_validos = []
+    dias_da_semana_validos = set()
     nome_turma_lower = turma.lower()
-    if "terça" in nome_turma_lower and "quinta" in nome_turma_lower:
-        dias_da_semana_validos = [1, 3]  # Terça e Quinta
-    elif "quarta" in nome_turma_lower and "sexta" in nome_turma_lower:
-        dias_da_semana_validos = [2, 4]  # Quarta e Sexta
+    
+    dias_map = {
+        "segunda": 0, "terça": 1, "terca": 1, 
+        "quarta": 2, "quinta": 3, "sexta": 4, 
+        "sábado": 5, "sabado": 5, "domingo": 6
+    }
+    
+    for dia_nome, dia_idx in dias_map.items():
+        if dia_nome in nome_turma_lower:
+            dias_da_semana_validos.add(dia_idx)
+            
+    if not dias_da_semana_validos:
+        dias_da_semana_validos = list(range(7)) # Fallback: todos os dias se não identificar
     else:
-        dias_da_semana_validos = list(range(7)) # Padrão: todos os dias
+        dias_da_semana_validos = sorted(list(dias_da_semana_validos))
 
     try:
         dias_no_mes = calendar.monthrange(ano_vigente, mes)[1]
@@ -499,8 +508,15 @@ def gerar_relatorio_excel_endpoint(
         
         # D7: Aniversário (Formatado)
         aniversario = aluno.get('Aniversario', '')
-        if aniversario and isinstance(aniversario, str) and 'T' in aniversario:
-             aniversario = aniversario.split('T')[0] # Limpa formato ISO se houver
+        if isinstance(aniversario, (datetime, pd.Timestamp)):
+            aniversario = aniversario.strftime('%d/%m/%Y')
+        elif aniversario and isinstance(aniversario, str):
+             aniversario = aniversario.split('T')[0].split(' ')[0]
+             try:
+                 dt_aniv = datetime.strptime(aniversario, '%Y-%m-%d')
+                 aniversario = dt_aniv.strftime('%d/%m/%Y')
+             except ValueError:
+                 pass
         ws.cell(row=linha_atual, column=4, value=aniversario)
 
         # E7 em diante: Registros de Presença
@@ -534,6 +550,7 @@ def gerar_relatorio_excel_consolidado(requests_list: List[RelatorioRequest]):
     try:
         from openpyxl import load_workbook
         from openpyxl.styles import Alignment
+        from openpyxl.utils import get_column_letter
     except ImportError:
         raise HTTPException(status_code=500, detail="A biblioteca 'openpyxl' é necessária no backend.")
 
@@ -577,6 +594,10 @@ def gerar_relatorio_excel_consolidado(requests_list: List[RelatorioRequest]):
         ws['B5'] = req.horario
         ws['E5'] = f"{req.mes:02d}/{req.ano}"
 
+        # Limpa cabeçalhos antigos da linha 6 (das datas até o fim provável) para evitar duplicação
+        for c in range(5, 35): 
+            ws.cell(row=6, column=c, value="")
+
         # Preencher Datas (Cabeçalho das colunas de presença)
         col_inicio_datas = 5 # Coluna E
         for i, data in enumerate(datas_str):
@@ -588,6 +609,14 @@ def gerar_relatorio_excel_consolidado(requests_list: List[RelatorioRequest]):
         # Definir posição da coluna Nível (Dinâmica: logo após a última data)
         col_nivel = col_inicio_datas + len(datas_str)
         ws.cell(row=6, column=col_nivel, value="Nível").alignment = Alignment(horizontal='center', vertical='center')
+        
+        # Remover colunas excedentes do template (após a coluna Nível)
+        max_col_template = ws.max_column
+        if max_col_template > col_nivel:
+            ws.delete_cols(col_nivel + 1, max_col_template - col_nivel)
+        
+        # Rastreia largura máxima para auto-ajuste (inicia com tamanho do cabeçalho)
+        max_width_nivel = len("Nível")
 
         # Preencher Linhas de Alunos
         linha_inicial = 7
@@ -600,12 +629,14 @@ def gerar_relatorio_excel_consolidado(requests_list: List[RelatorioRequest]):
             
             # Formata Aniversário
             aniversario = aluno.get('Aniversario', '')
-            if aniversario and isinstance(aniversario, str):
+            if isinstance(aniversario, (datetime, pd.Timestamp)):
+                aniversario = aniversario.strftime('%d/%m/%Y')
+            elif aniversario and isinstance(aniversario, str):
                  aniversario = aniversario.split('T')[0].split(' ')[0]
                  try:
                      dt_aniv = datetime.strptime(aniversario, '%Y-%m-%d')
                      aniversario = dt_aniv.strftime('%d/%m/%Y')
-                 except:
+                 except ValueError:
                      pass
             ws.cell(row=linha_atual, column=4, value=aniversario)
 
@@ -615,7 +646,13 @@ def gerar_relatorio_excel_consolidado(requests_list: List[RelatorioRequest]):
                 ws.cell(row=linha_atual, column=col_inicio_datas + i, value=status).alignment = Alignment(horizontal='center')
 
             # Nível na coluna dinâmica
-            ws.cell(row=linha_atual, column=col_nivel, value=aluno.get('Nível', ''))
+            nivel_val = aluno.get('Nível', '')
+            ws.cell(row=linha_atual, column=col_nivel, value=nivel_val)
+            if nivel_val:
+                max_width_nivel = max(max_width_nivel, len(str(nivel_val)))
+        
+        # Aplica o ajuste de largura na coluna Nível (+ margem visual)
+        ws.column_dimensions[get_column_letter(col_nivel)].width = max_width_nivel + 3
 
     # 3. Remover a aba de template original antes de salvar
     if "Template" in wb.sheetnames:
