@@ -125,7 +125,7 @@ class ColumnResizer(ctk.CTkFrame):
     """Um widget separador que permite redimensionar uma coluna de um grid."""
     def __init__(self, master, grid_layout, column_index, app_instance):
         # A largura do frame define a área clicável. O cursor indica a funcionalidade.
-        super().__init__(master, width=7, cursor="sb_h_double_arrow", fg_color="transparent")
+        super().__init__(master, width=7, height=1, cursor="sb_h_double_arrow", fg_color="transparent")
         self.grid_layout = grid_layout
         self.column_index = column_index
         self._start_x = 0
@@ -192,6 +192,11 @@ class App(ctk.CTk):
         # Botão Exclusões (sem ação definida por enquanto)
         self.btn_exclusoes_main = ctk.CTkButton(self.main_menu_frame, text="Exclusões", command=lambda: self.show_view("Exclusões"), fg_color="transparent", border_width=1)
         self.btn_exclusoes_main.grid(row=4, column=0, padx=20, pady=(20, 20), sticky="s")
+        self.btn_exclusoes_main.grid(row=4, column=0, padx=20, pady=(20, 10), sticky="s")
+
+        # Botão Relatórios
+        self.btn_relatorios_main = ctk.CTkButton(self.main_menu_frame, text="Relatórios", command=lambda: self.show_view("Relatórios"), fg_color="transparent", border_width=1)
+        self.btn_relatorios_main.grid(row=5, column=0, padx=20, pady=(0, 20), sticky="s")
             
         # --- 1.2. Frame do Menu de Controle da CHAMADA (inicialmente oculto) ---
         self.chamada_control_frame = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
@@ -216,6 +221,11 @@ class App(ctk.CTk):
         
         self.chamada_exclusoes_button = ctk.CTkButton(self.chamada_control_frame, text="Exclusões", command=lambda: self.show_view("Exclusões"), fg_color="transparent", border_width=1)
         self.chamada_exclusoes_button.grid(row=8, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="s")
+        self.chamada_exclusoes_button.grid(row=8, column=0, columnspan=2, padx=20, pady=(0, 10), sticky="s")
+
+        # Botão Relatórios
+        self.chamada_relatorios_button = ctk.CTkButton(self.chamada_control_frame, text="Relatórios", command=lambda: self.show_view("Relatórios"), fg_color="transparent", border_width=1)
+        self.chamada_relatorios_button.grid(row=9, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="s")
 
         # --- 2. ÁREA PRINCIPAL (MAIN CONTENT) ---
         self.main_content_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
@@ -231,6 +241,7 @@ class App(ctk.CTk):
         self.tab_view.add("Alunos")
         self.tab_view.add("Turmas")
         self.tab_view.add("Exclusões")
+        self.tab_view.add("Relatórios")
         self.tab_view.set("Chamada") 
 
         # --- Botão Adicionar Aluno (canto superior direito, sobreposto) ---
@@ -317,9 +328,35 @@ class App(ctk.CTk):
         self.exclusoes_scroll_frame = ctk.CTkScrollableFrame(self.tab_view.tab("Exclusões"), label_text="Histórico de Exclusões")
         self.exclusoes_scroll_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
 
+        # Definição de meses para uso nos combos
+        meses = [datetime(2000, i, 1).strftime('%B') for i in range(1, 13)]
+
+        # --- 2.6. Conteúdo da Aba "Relatórios" ---
+        self.tab_view.tab("Relatórios").grid_columnconfigure(0, weight=0) # Painel esquerdo (fixo)
+        self.tab_view.tab("Relatórios").grid_columnconfigure(1, weight=1) # Grid (expansível)
+        self.tab_view.tab("Relatórios").grid_rowconfigure(0, weight=1)
+
+        # Painel Esquerdo (Controles de Data)
+        self.relatorios_left_frame = ctk.CTkFrame(self.tab_view.tab("Relatórios"), width=200, corner_radius=0)
+        self.relatorios_left_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 10), pady=0)
+        self.relatorios_left_frame.grid_propagate(False) # Mantém a largura fixa
+
+        ctk.CTkLabel(self.relatorios_left_frame, text="Período do Relatório", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=(20, 10), padx=10)
+        
+        ctk.CTkLabel(self.relatorios_left_frame, text="Ano:").pack(pady=(10, 0), padx=10, anchor="w")
+        self.relatorios_ano_combo = ctk.CTkComboBox(self.relatorios_left_frame, values=[str(datetime.now().year)])
+        self.relatorios_ano_combo.pack(pady=(0, 10), padx=10, fill="x")
+
+        ctk.CTkLabel(self.relatorios_left_frame, text="Mês:").pack(pady=(10, 0), padx=10, anchor="w")
+        self.relatorios_mes_combo = ctk.CTkComboBox(self.relatorios_left_frame, values=meses)
+        self.relatorios_mes_combo.pack(pady=(0, 20), padx=10, fill="x")
+
+        # Grid Direito (Lista de Turmas)
+        self.relatorios_scroll_frame = ctk.CTkScrollableFrame(self.tab_view.tab("Relatórios"), label_text="Seleção de Turmas para Relatório")
+        self.relatorios_scroll_frame.grid(row=0, column=1, sticky="nsew", padx=0, pady=0)
+
         # --- ARMAZENAMENTO DE ESTADO ---
         self.sidebar_is_open = True
-        meses = [datetime(2000, i, 1).strftime('%B') for i in range(1, 13)]
         self.alunos_sort_state = [] # Lista de dicionários para histórico de ordenação: [{'key': 'Nome', 'reverse': False}, ...]
         self.chamada_sort_reverse = False # Controle de ordenação da chamada
         self.alunos_filter_state = {} # Para filtros por coluna
@@ -343,6 +380,7 @@ class App(ctk.CTk):
         self.alunos_grid_resizers = [] # Lista para guardar os widgets de redimensionamento
         self.window_geometries = {} # Cache para geometria das janelas (Toplevels)
         self.chamada_undo_stack = [] # Pilha para desfazer ações na chamada
+        self.relatorios_selection_vars = {} # Armazena as variáveis dos checkboxes de relatório
         
         # Mapeamento de views para seus frames de controle
         self.control_frames = {
@@ -464,6 +502,10 @@ class App(ctk.CTk):
             self.add_turma_button.place(relx=0.0, rely=0.0, x=70, y=10, anchor="nw")
         elif view_name == "Exclusões":
             self.carregar_lista_exclusoes()
+            if self.sidebar_is_open:
+                self.toggle_sidebar()
+        elif view_name == "Relatórios":
+            self.carregar_interface_relatorios()
             if self.sidebar_is_open:
                 self.toggle_sidebar()
 
@@ -2020,6 +2062,85 @@ class App(ctk.CTk):
             self.exclusoes_sort_state.append({'key': key, 'reverse': sort_direction == 'desc'})
         
         self.filtrar_exclusoes()
+
+    # --- MÉTODOS PARA A ABA RELATÓRIOS ---
+    def carregar_interface_relatorios(self):
+        """Prepara a interface de relatórios, carregando datas e turmas."""
+        # Define valores padrão para Ano e Mês se ainda não definidos
+        hoje = datetime.now()
+        meses_pt = {1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril', 5: 'Maio', 6: 'Junho',
+                    7: 'Julho', 8: 'Agosto', 9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'}
+        
+        self.relatorios_ano_combo.set(str(hoje.year))
+        self.relatorios_mes_combo.set(meses_pt.get(hoje.month))
+
+        # Carrega as turmas no grid
+        self.construir_grid_relatorios()
+
+    def construir_grid_relatorios(self):
+        """Constrói o grid de turmas na aba Relatórios."""
+        for widget in self.relatorios_scroll_frame.winfo_children():
+            widget.destroy()
+        
+        self.relatorios_selection_vars = {}
+        turmas = self.turmas_data or []
+
+        if not turmas:
+            ctk.CTkLabel(self.relatorios_scroll_frame, text="Nenhuma turma encontrada.").pack(pady=20)
+            return
+
+        # Configuração das colunas
+        headers = ["Turma", "Horário", "Nível", "Professor", "Ações"]
+        
+        # Pesos: Colunas de dados expandem, colunas de ação (Ver/Check) ficam fixas/pequenas
+        self.relatorios_scroll_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
+        self.relatorios_scroll_frame.grid_columnconfigure(4, weight=0, minsize=100)
+
+        # Cabeçalhos
+        for i, header in enumerate(headers):
+            ctk.CTkLabel(self.relatorios_scroll_frame, text=header, font=ctk.CTkFont(weight="bold")).grid(row=0, column=i, padx=5, pady=5, sticky="ew")
+
+        # Linhas
+        for row_idx, turma in enumerate(turmas, start=1):
+            # Dados da Turma
+            ctk.CTkLabel(self.relatorios_scroll_frame, text=turma.get("Turma", ""), anchor="center").grid(row=row_idx, column=0, padx=5, pady=5, sticky="ew")
+            ctk.CTkLabel(self.relatorios_scroll_frame, text=turma.get("Horário", ""), anchor="center").grid(row=row_idx, column=1, padx=5, pady=5, sticky="ew")
+            ctk.CTkLabel(self.relatorios_scroll_frame, text=turma.get("Nível", ""), anchor="center").grid(row=row_idx, column=2, padx=5, pady=5, sticky="ew")
+            ctk.CTkLabel(self.relatorios_scroll_frame, text=turma.get("Professor", ""), anchor="center").grid(row=row_idx, column=3, padx=5, pady=5, sticky="ew")
+
+            # Frame de Ações (Ver + Selecionar)
+            actions_frame = ctk.CTkFrame(self.relatorios_scroll_frame, fg_color="transparent")
+            actions_frame.grid(row=row_idx, column=4, padx=5, pady=5)
+
+            # Botão 'Ver' (Estilo Exclusões)
+            btn_ver = ctk.CTkButton(actions_frame, text="ver", width=40, height=22, font=ctk.CTkFont(size=11),
+                                    fg_color="transparent", border_width=1,
+                                    command=lambda t=turma: self.abrir_visualizacao_relatorio(t))
+            btn_ver.pack(side="left", padx=(0, 5))
+
+            # Checkbox de Seleção
+            # Cria uma chave única para identificar a turma (ex: Turma + Horário)
+            turma_id = f"{turma.get('Turma')}_{turma.get('Horário')}"
+            var = tk.BooleanVar(value=False)
+            self.relatorios_selection_vars[turma_id] = var
+            
+            chk = ctk.CTkCheckBox(actions_frame, text="", variable=var, width=20, checkbox_width=20, checkbox_height=20)
+            chk.pack(side="left", padx=5)
+
+    def abrir_visualizacao_relatorio(self, turma_info):
+        """Abre um frame/janela com a visualização dos dados da chamada para a turma selecionada."""
+        ano = self.relatorios_ano_combo.get()
+        mes = self.relatorios_mes_combo.get()
+        
+        top = ctk.CTkToplevel(self)
+        top.title(f"Relatório - {turma_info.get('Turma')} ({mes}/{ano})")
+        top.geometry("600x400")
+        top.transient(self)
+        self.after(10, lambda: self._center_toplevel(top))
+
+        ctk.CTkLabel(top, text=f"Visualização de Chamada: {turma_info.get('Turma')}", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=20)
+        ctk.CTkLabel(top, text=f"Período: {mes} de {ano}", font=ctk.CTkFont(size=14)).pack(pady=(0, 20))
+        ctk.CTkLabel(top, text="(Aqui será exibida a grade de presença consolidada)", text_color="gray").pack(expand=True)
 
     # MODIFICADO: A lógica foi movida para a classe AddStudentToplevel
     def open_add_student_window(self):

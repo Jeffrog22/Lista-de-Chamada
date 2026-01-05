@@ -1,12 +1,12 @@
 {
     "column_widths": {
-        "Nome": 0,
-        "N\u00edvel": 0,
-        "Idade": 0,
-        "Categoria": 0,
+        "Nome": 245,
+        "N\u00edvel": 26,
+        "Idade": 76,
+        "Categoria": 99,
         "Turma": 0,
-        "Hor\u00e1rio": 0,
-        "Professor": 0,
+        "Hor\u00e1rio": 86,
+        "Professor": 150,
         "": 0
     },
     "filter_menu_geometry": {
