@@ -1,12 +1,12 @@
 {
     "column_widths": {
-        "Nome": 191,
-        "N\u00edvel": 120,
-        "Idade": 91,
-        "Categoria": 172,
-        "Turma": 117,
-        "Hor\u00e1rio": 110,
-        "Professor": 132,
+        "Nome": 0,
+        "N\u00edvel": 0,
+        "Idade": 0,
+        "Categoria": 0,
+        "Turma": 0,
+        "Hor\u00e1rio": 0,
+        "Professor": 0,
         "": 0
     },
     "filter_menu_geometry": {
@@ -99,6 +99,31 @@
             "width": 157,
             "x": 134,
             "y": 123
+        },
+        "Exclusoes_Nome": {
+            "width": 259,
+            "x": 101,
+            "y": 171
+        },
+        "Exclusoes_Turma": {
+            "width": 183,
+            "x": 408,
+            "y": 171
+        },
+        "Exclusoes_Hor\u00e1rio": {
+            "width": 118,
+            "x": 595,
+            "y": 171
+        },
+        "Exclusoes_Professor": {
+            "width": 162,
+            "x": 723,
+            "y": 171
+        },
+        "Exclusoes_Data Exclus\u00e3o": {
+            "width": 139,
+            "x": 885,
+            "y": 171
         }
     },
     "window_geometries": {

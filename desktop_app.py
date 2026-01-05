@@ -299,9 +299,23 @@ class App(ctk.CTk):
 
         # --- 2.5. Conteúdo da Aba "Exclusões" ---
         self.tab_view.tab("Exclusões").grid_columnconfigure(0, weight=1)
-        self.tab_view.tab("Exclusões").grid_rowconfigure(0, weight=1)
+        self.tab_view.tab("Exclusões").grid_rowconfigure(0, weight=0) # Linha de busca
+        self.tab_view.tab("Exclusões").grid_rowconfigure(1, weight=1) # Linha da lista
+
+        # Widget de busca por nome na aba Exclusões
+        self.exclusoes_search_entry = ctk.CTkEntry(self.tab_view.tab("Exclusões"), placeholder_text="Buscar por nome...")
+        self.exclusoes_search_entry.grid(row=0, column=0, padx=10, pady=10, sticky="w")
+        self.exclusoes_search_entry.bind("<KeyRelease>", self.filtrar_exclusoes)
+
+        # Botão para limpar filtros na aba Exclusões
+        self.btn_limpar_filtros_exclusoes = ctk.CTkButton(self.tab_view.tab("Exclusões"), text="Limpar Filtros", 
+                                                          width=100, font=ctk.CTkFont(size=9),
+                                                          fg_color="transparent", border_width=1,
+                                                          command=self._clear_all_exclusoes_filters)
+        self.btn_limpar_filtros_exclusoes.grid(row=0, column=0, padx=10, pady=10, sticky="e")
+
         self.exclusoes_scroll_frame = ctk.CTkScrollableFrame(self.tab_view.tab("Exclusões"), label_text="Histórico de Exclusões")
-        self.exclusoes_scroll_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        self.exclusoes_scroll_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
 
         # --- ARMAZENAMENTO DE ESTADO ---
         self.sidebar_is_open = True
@@ -312,6 +326,9 @@ class App(ctk.CTk):
         self.chamada_data = {} # Guarda os dados da API
         self.turmas_filter_state = {} # Estado dos filtros da aba Turmas
         self.turmas_sort_state = [] # Estado da ordenação da aba Turmas
+        self.exclusoes_filter_state = {} # Estado dos filtros da aba Exclusões
+        self.exclusoes_sort_state = [] # Estado da ordenação da aba Exclusões
+        self.exclusoes_data = [] # Cache dos dados de exclusões
         self.chamada_widgets = {} # Guarda os widgets de botão para poder ler o estado
         self.all_students_data = None # Cache para todos os alunos
         self.categorias_data = None # Cache para as categorias
@@ -901,7 +918,7 @@ class App(ctk.CTk):
             cod = entry_cod.get()
             just = entry_just.get()
             if not cod or not just:
-                messagebox.showwarning("Aviso", "Preencha o código e a justificativa.", parent=top)
+                messagebox.showwarning("Aviso", "Preencha o dia e o motivo da justificativa.", parent=top)
                 return
             
             # Constrói a data completa usando o ano e mês vigentes
@@ -1822,7 +1839,30 @@ class App(ctk.CTk):
                 response = requests.get(f"{API_BASE_URL}/api/exclusoes")
                 response.raise_for_status()
                 data = response.json()
-                self.after(0, lambda: self.construir_grid_exclusoes(data))
+
+                # Normaliza os dados (garante 'Aniversario', calcula Idade, etc.)
+                cats = self.categorias_data or []
+                turmas = self.turmas_data or []
+                for i, aluno in enumerate(data):
+                    data[i] = self._normalizar_dados_aluno(aluno, cats, turmas)
+                    
+                    # Prepara dados para ordenação e exibição de data
+                    raw_date = data[i].get("Data Exclusão") or data[i].get("deleted_at")
+                    data[i]["_data_exclusao_iso"] = raw_date # Mantém original para ordenação
+                    
+                    data_fmt = "-"
+                    if raw_date:
+                        try:
+                            dt = datetime.fromisoformat(str(raw_date).replace('Z', ''))
+                            meses_pt_abbr = {1: 'Jan', 2: 'Fev', 3: 'Mar', 4: 'Abr', 5: 'Mai', 6: 'Jun',
+                                            7: 'Jul', 8: 'Ago', 9: 'Set', 10: 'Out', 11: 'Nov', 12: 'Dez'}
+                            data_fmt = f"{meses_pt_abbr.get(dt.month, '')}/{dt.year}"
+                        except ValueError:
+                            data_fmt = str(raw_date)
+                    data[i]["_data_exclusao_fmt"] = data_fmt
+
+                self.exclusoes_data = data
+                self.after(0, lambda: self.filtrar_exclusoes())
             except requests.exceptions.RequestException as e:
                 self.after(0, lambda err=e: self._exibir_erro_exclusoes(err))
         self.run_in_thread(_task)
@@ -1830,6 +1870,47 @@ class App(ctk.CTk):
     def _exibir_erro_exclusoes(self, error):
         for widget in self.exclusoes_scroll_frame.winfo_children(): widget.destroy()
         ctk.CTkLabel(self.exclusoes_scroll_frame, text=f"Erro ao carregar exclusões: {error}").pack(pady=20)
+
+    def filtrar_exclusoes(self, event=None):
+        """Filtra e ordena a lista de exclusões."""
+        if not self.exclusoes_data:
+            self.construir_grid_exclusoes([])
+            return
+
+        query = self.exclusoes_search_entry.get().lower()
+        
+        # 1. Busca por nome
+        filtered = [a for a in self.exclusoes_data if query in a.get('Nome', '').lower()] if query else list(self.exclusoes_data)
+
+        # 2. Filtros de coluna
+        for key, selected_values in self.exclusoes_filter_state.items():
+            if not selected_values: continue
+            target_key = "_data_exclusao_fmt" if key == "Data Exclusão" else key
+            filtered = [item for item in filtered if str(item.get(target_key) or '') in selected_values]
+
+        # 3. Ordenação
+        if self.exclusoes_sort_state:
+             for sort_instruction in self.exclusoes_sort_state:
+                key = sort_instruction['key']
+                reverse = sort_instruction['reverse']
+                
+                def get_sort_val(item):
+                    if key == "Data Exclusão":
+                        return item.get("_data_exclusao_iso") or ""
+                    if key == "Horário":
+                        val = item.get(key, "")
+                        return val.split('-')[0] if val else ""
+                    return str(item.get(key, "")).lower()
+
+                filtered.sort(key=get_sort_val, reverse=reverse)
+
+        self.construir_grid_exclusoes(filtered)
+
+    def _clear_all_exclusoes_filters(self):
+        self.exclusoes_filter_state = {}
+        self.exclusoes_sort_state = []
+        self.exclusoes_search_entry.delete(0, "end")
+        self.filtrar_exclusoes()
 
     def construir_grid_exclusoes(self, alunos_excluidos):
         """Constrói a tabela de alunos excluídos."""
@@ -1846,29 +1927,44 @@ class App(ctk.CTk):
         self.exclusoes_scroll_frame.grid_columnconfigure((1,2,3,4), weight=0, minsize=100)
         self.exclusoes_scroll_frame.grid_columnconfigure(5, weight=0, minsize=120)
 
-        for i, h in enumerate(headers):
-            ctk.CTkLabel(self.exclusoes_scroll_frame, text=h, font=ctk.CTkFont(weight="bold")).grid(row=0, column=i, padx=5, pady=5, sticky="ew")
+        for i, header in enumerate(headers):
+            if header == "Ações":
+                ctk.CTkLabel(self.exclusoes_scroll_frame, text=header, font=ctk.CTkFont(weight="bold")).grid(row=0, column=i, padx=5, pady=5, sticky="ew")
+                continue
 
-        meses_pt_abbr = {1: 'Jan', 2: 'Fev', 3: 'Mar', 4: 'Abr', 5: 'Mai', 6: 'Jun',
-                         7: 'Jul', 8: 'Ago', 9: 'Set', 10: 'Out', 11: 'Nov', 12: 'Dez'}
+            # Cria botão de filtro
+            display_text = header
+            sort_info = next((item for item in self.exclusoes_sort_state if item['key'] == header), None)
+            is_sorted = sort_info is not None
+            is_filtered = header in self.exclusoes_filter_state and self.exclusoes_filter_state[header]
+
+            if is_sorted:
+                sort_arrow = '▼' if sort_info['reverse'] else '▲'
+                display_text = f"{header} {sort_arrow}"
+            elif is_filtered:
+                display_text += " ▾"
+
+            fg_color = ("#e0e2e4", "#4a4d50") if (is_sorted or is_filtered) else "transparent"
+            
+            btn = ctk.CTkButton(self.exclusoes_scroll_frame, text=display_text,
+                                font=ctk.CTkFont(weight="bold"),
+                                fg_color=fg_color,
+                                text_color=("gray10", "gray90"),
+                                hover_color=("#d3d5d7", "#5a5d60"),
+                                anchor="center" if header != "Nome" else "w")
+            
+            if not (is_sorted or is_filtered):
+                btn.configure(hover=False)
+
+            btn.configure(command=lambda k=header, b=btn: self._open_exclusoes_filter_menu(k, b))
+            btn.grid(row=0, column=i, padx=5, pady=5, sticky="ew")
 
         for idx, aluno in enumerate(alunos_excluidos, start=1):
-            # Formata Data de Exclusão (mmm/aaaa)
-            data_excl = aluno.get("Data Exclusão") or aluno.get("deleted_at")
-            data_fmt = "-"
-            if data_excl:
-                try:
-                    # Tenta parsear ISO ou formato padrão
-                    dt = datetime.fromisoformat(str(data_excl).replace('Z', ''))
-                    data_fmt = f"{meses_pt_abbr.get(dt.month, '')}/{dt.year}"
-                except ValueError:
-                    data_fmt = str(data_excl)
-
             ctk.CTkLabel(self.exclusoes_scroll_frame, text=aluno.get("Nome", ""), anchor="w").grid(row=idx, column=0, padx=5, pady=2, sticky="ew")
             ctk.CTkLabel(self.exclusoes_scroll_frame, text=aluno.get("Turma", ""), anchor="center").grid(row=idx, column=1, padx=5, pady=2)
             ctk.CTkLabel(self.exclusoes_scroll_frame, text=aluno.get("Horário", ""), anchor="center").grid(row=idx, column=2, padx=5, pady=2)
             ctk.CTkLabel(self.exclusoes_scroll_frame, text=aluno.get("Professor", ""), anchor="center").grid(row=idx, column=3, padx=5, pady=2)
-            ctk.CTkLabel(self.exclusoes_scroll_frame, text=data_fmt, anchor="center").grid(row=idx, column=4, padx=5, pady=2)
+            ctk.CTkLabel(self.exclusoes_scroll_frame, text=aluno.get("_data_exclusao_fmt", "-"), anchor="center").grid(row=idx, column=4, padx=5, pady=2)
 
             # Botões de Ação
             actions_frame = ctk.CTkFrame(self.exclusoes_scroll_frame, fg_color="transparent")
@@ -1881,6 +1977,49 @@ class App(ctk.CTk):
             ctk.CTkButton(actions_frame, text="restaurar", width=60, height=22, font=ctk.CTkFont(size=11),
                           fg_color="#2ECC71", hover_color="#27ae60", text_color="white",
                           command=lambda a=aluno: self.open_restore_student_window(a)).pack(side="left", padx=2)
+
+    def _open_exclusoes_filter_menu(self, key, button_widget):
+        if self.active_filter_menu and self.active_filter_menu.winfo_exists():
+            is_same = getattr(self.active_filter_menu, 'button_widget', None) == button_widget
+            self.active_filter_menu.destroy()
+            if is_same: return
+        self.after(10, lambda: self._create_exclusoes_filter_menu_safely(key, button_widget))
+
+    def _create_exclusoes_filter_menu_safely(self, key, button_widget):
+        if not self.exclusoes_data or self.active_filter_menu: return
+
+        # Filtra opções disponíveis baseado nos outros filtros
+        data_menu = self.exclusoes_data
+        query = self.exclusoes_search_entry.get().lower()
+        if query:
+            data_menu = [a for a in data_menu if query in a.get('Nome', '').lower()]
+
+        for f_key, vals in self.exclusoes_filter_state.items():
+            if f_key != key and vals:
+                t_key = "_data_exclusao_fmt" if f_key == "Data Exclusão" else f_key
+                data_menu = [item for item in data_menu if str(item.get(t_key) or '') in vals]
+
+        target_key = "_data_exclusao_fmt" if key == "Data Exclusão" else key
+        unique_values = sorted(list(set(str(item.get(target_key) or '') for item in data_menu)))
+
+        if not unique_values:
+             messagebox.showinfo("Filtro", f"Não há valores disponíveis para filtrar na coluna '{key}'.", parent=self)
+             return
+
+        self.active_filter_menu = FilterMenu(self, key, unique_values, button_widget, self._apply_exclusoes_filter_and_sort,
+                                             active_filters=self.exclusoes_filter_state.get(key),
+                                             cache_key=f"Exclusoes_{key}",
+                                             align="left" if key == "Nome" else "center")
+
+    def _apply_exclusoes_filter_and_sort(self, key, selected_values, sort_direction=None):
+        if selected_values is not None:
+            self.exclusoes_filter_state[key] = selected_values
+        
+        if sort_direction is not None:
+            self.exclusoes_sort_state = [s for s in self.exclusoes_sort_state if s['key'] != key]
+            self.exclusoes_sort_state.append({'key': key, 'reverse': sort_direction == 'desc'})
+        
+        self.filtrar_exclusoes()
 
     # MODIFICADO: A lógica foi movida para a classe AddStudentToplevel
     def open_add_student_window(self):
