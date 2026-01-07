@@ -280,6 +280,13 @@ class App(ctk.CTk):
         alunos_grid_controls_frame = ctk.CTkFrame(self.tab_view.tab("Alunos"), fg_color="transparent")
         alunos_grid_controls_frame.grid(row=0, column=1, padx=(0, 10), pady=10, sticky="e")
         
+        # Botão Recarregar (Novo)
+        self.reload_students_button = ctk.CTkButton(alunos_grid_controls_frame, text="⟳", width=30,
+                                                    font=ctk.CTkFont(size=12, weight="bold"),
+                                                    command=self._force_reload_students,
+                                                    fg_color="transparent", border_width=1)
+        self.reload_students_button.pack(side="left", padx=(0, 5))
+
         # Botão para ativar/desativar a edição da grade
         button_width = 60 # Largura padrão para os botões
         self.alunos_grid_edit_mode = tk.BooleanVar(value=False)
@@ -493,6 +500,7 @@ class App(ctk.CTk):
         if view_name in self.control_frames:
             self.control_frames[view_name].grid(row=0, column=0, sticky="nsew")
         if view_name == "Alunos":
+            self.all_students_data = None # Força o recarregamento dos dados ao entrar na aba
             self.iniciar_busca_todos_alunos() # Carrega todos os alunos ao entrar na aba
             # Recolhe o menu ao selecionar "Alunos"
             if self.sidebar_is_open:
@@ -1234,6 +1242,11 @@ class App(ctk.CTk):
         # Limpa o texto da busca para garantir que todos os alunos sejam exibidos após a limpeza
         self.alunos_search_entry.delete(0, "end")
         self.filtrar_alunos_por_nome()
+
+    def _force_reload_students(self):
+        """Limpa o cache e recarrega a lista de alunos do backend."""
+        self.all_students_data = None
+        self.iniciar_busca_todos_alunos()
 
     def _toggle_grid_edit_mode(self):
         """Ativa ou desativa o modo de edição da grade de alunos."""

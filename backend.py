@@ -66,7 +66,7 @@ def get_dados_cached() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.Dat
     file_mod_time = os.path.getmtime(NOME_ARQUIVO) if os.path.exists(NOME_ARQUIVO) else 0
     if now - _cache.get("timestamp", 0) > CACHE_EXPIRATION_SECONDS or file_mod_time > _cache.get("timestamp", 0):
         try:
-            xls = pd.ExcelFile(NOME_ARQUIVO)
+            xls = pd.ExcelFile(NOME_ARQUIVO, engine='openpyxl')
             df_alunos = pd.read_excel(xls, sheet_name='Alunos').fillna("")
             df_turmas = pd.read_excel(xls, sheet_name='Turmas').fillna("")
 
